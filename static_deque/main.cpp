@@ -61,7 +61,8 @@ template<std::size_t N, std::size_t alignment = alignof ( std::max_align_t )>
 struct chunk {
     using chunk_sptr = std::unique_ptr<chunk>;
     static_assert ( N > 16, "chunk: N is too small" );
-    alignas ( alignment ) char m_buf[ N - 2 * sizeof ( char * ) ];
+    static constexpr std::size_t char_size = N - 3 * sizeof ( char * );
+    alignas ( alignment ) char m_buf[ char_size ];
     char * m_ptr                  = nullptr;
     std::unique_ptr<chunk> m_next = nullptr;
     int c                         = counter++;
@@ -69,6 +70,8 @@ struct chunk {
     constexpr chunk ( ) noexcept { std::cout << "c'tor " << c << " called" << nl; };
 
     ~chunk ( ) noexcept { std::cout << "d'tor " << c << " called" << nl; }
+
+    static constexpr std::size_t capacity ( ) noexcept { return char_size; };
 };
 
 template<typename Type, typename SizeType, std::size_t ChunkSize = 512u>
@@ -100,7 +103,7 @@ class mempool {
     using chunk_ptr  = chunk *;
     using chunk_sptr = std::unique_ptr<chunk>;
 
-    static constexpr size_type chunck_size = ChunkSize;
+    static constexpr size_type chunck_size = static_cast<size_type> ( chunk::capacity ( ) / sizeof ( value_type ) );
 
     std::unique_ptr<chunk> m_data;
     chunk_ptr m_last_data = nullptr;
