@@ -27,6 +27,7 @@
 #include <cstdlib>
 
 #include <array>
+#include <memory>
 #include <sax/iostream.hpp>
 #include <random>
 #include <string>
@@ -54,19 +55,96 @@ void handleEptr ( std::exception_ptr eptr ) { // Passing by value is ok.
     }
 }
 
+int counter = 0;
+
+template<std::size_t N, std::size_t alignment = alignof ( std::max_align_t )>
+struct chunk {
+    using chunk_sptr = std::unique_ptr<chunk>;
+    static_assert ( N > 16, "chunk: N is too small" );
+    alignas ( alignment ) char m_buf[ N - 2 * sizeof ( char * ) ];
+    char * m_ptr                  = nullptr;
+    std::unique_ptr<chunk> m_next = nullptr;
+    int c                         = counter++;
+
+    constexpr chunk ( ) noexcept { std::cout << "c'tor " << c << " called" << nl; };
+
+    ~chunk ( ) noexcept { std::cout << "d'tor " << c << " called" << nl; }
+};
+
+template<typename Type, typename SizeType, std::size_t ChunkSize = 512u>
+class mempool {
+
+    static_assert ( is_power_2 ( ChunkSize ), "Template parameter 3 must be an integral value with a value a power of 2" );
+
+    public:
+    using value_type    = Type;
+    using pointer       = value_type *;
+    using const_pointer = value_type const *;
+
+    using reference       = value_type &;
+    using const_reference = value_type const &;
+    using rv_reference    = value_type &&;
+
+    using size_type       = SizeType;
+    using difference_type = std::make_signed<size_type>;
+
+    using iterator               = pointer;
+    using const_iterator         = const_pointer;
+    using reverse_iterator       = pointer;
+    using const_reverse_iterator = const_pointer;
+
+    using void_ptr = void *;
+    using char_ptr = char *;
+
+    using chunk      = chunk<ChunkSize, alignof ( value_type )>;
+    using chunk_ptr  = chunk *;
+    using chunk_sptr = std::unique_ptr<chunk>;
+
+    static constexpr size_type chunck_size = ChunkSize;
+
+    std::unique_ptr<chunk> m_data;
+    chunk_ptr m_last_data = nullptr;
+
+    void grow ( ) noexcept {
+        if ( m_last_data ) {
+            m_last_data->m_next = std::make_unique<chunk> ( );
+            m_last_data         = m_last_data->m_next.get ( );
+        }
+        else {
+            m_data      = std::make_unique<chunk> ( );
+            m_last_data = m_data.get ( );
+        }
+    }
+
+    pointer m_front = nullptr, m_back = nullptr;
+};
+
 int main ( ) {
 
+    mempool<int, std::size_t, 64> pool;
+
     std::exception_ptr eptr;
+
     try {
 
-        using sdeq = sax::static_deque<int, int>;
+        { pool.grow ( ); }
 
-        sdeq d;
+        std::cout << "leaving scope 1" << nl;
+
+        { pool.grow ( ); }
+
+        std::cout << "leaving scope 2" << nl;
+
+        { pool.grow ( ); }
+
+        std::cout << "leaving scope 3" << nl;
     }
     catch ( ... ) {
         eptr = std::current_exception ( ); // Capture.
     }
     handleEptr ( eptr );
+
+    std::cout << "leaving scope 4" << nl;
 
     return EXIT_SUCCESS;
 }
