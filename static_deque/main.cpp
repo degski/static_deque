@@ -68,6 +68,56 @@ struct overloaded : Ts... {
 template<typename... Ts>
 overloaded ( Ts... ) -> overloaded<Ts...>;
 
+template<typename Type>
+struct wobble_ptr {
+    public:
+    using value_type    = Type;
+    using pointer       = value_type *;
+    using const_pointer = value_type const *;
+
+    using reference       = value_type &;
+    using const_reference = value_type const &;
+    using rv_reference    = value_type &&;
+
+    explicit wobble_ptr ( ) noexcept {}
+    wobble_ptr ( pointer p_, bool is_unique_ = true ) noexcept : m_raw ( is_unique_ ? p_ : p_ | one_mask ) {}
+
+    wobble_ptr ( wobble_ptr const & ) = delete;
+    wobble_ptr ( wobble_ptr && rhs_ ) noexcept : m_raw ( std::exchange ( rhs_.m_raw, nullptr ) ) {}
+
+    ~wobble_ptr ( ) noexcept { destruct ( ); }
+
+    wobble_ptr & operator= ( wobble_ptr const & ) noexcept = delete;
+    wobble_ptr & operator                                  = ( wobble_ptr && rhs_ ) noexcept {
+        destruct ( );
+        m_raw = std::exchange ( rhs_.m_raw, nullptr );
+    }
+
+    [[nodiscard]] const_pointer get ( ) const noexcept {
+        return reinterpret_cast<const_pointer> ( reinterpret_cast<std::uintptr_t> ( m_raw ) & ptr_mask );
+    }
+    [[nodiscard]] pointer get ( ) noexcept { return const_cast<pointer> ( std::as_const ( *this ).get ( ) ); }
+
+    [[nodiscard]] const_pointer operator-> ( ) const noexcept { return get ( ); }
+    [[nodiscard]] pointer operator-> ( ) noexcept { return const_cast<pointer> ( std::as_const ( *this ).operator-> ( ) ); }
+
+    void make_weak ( ) noexcept { m_raw |= one_mask; }
+    void make_unique ( ) noexcept { m_raw &= ptr_mask; }
+
+    [[nodiscard]] bool is_weak ( ) const noexcept { return reinterpret_cast<std::uintptr_t> ( m_raw ) & one_mask; }
+    [[nodiscard]] bool is_unique ( ) const noexcept { return not is_weak ( ); }
+
+    private:
+    static constexpr std::uintptr_t ptr_mask = 0x00FF'FFFF'FFFF'FFF0;
+    static constexpr std::uintptr_t one_mask = 0x0000'0000'0000'0001;
+
+    pointer m_raw = nullptr;
+
+    void destruct ( ) noexcept {
+        if ( is_unique ( ) )
+            delete m_raw;
+    }
+};
 template<std::size_t N, std::size_t alignment = alignof ( std::max_align_t )>
 struct chunk {
     using chunk_uptr = std::unique_ptr<chunk>;
