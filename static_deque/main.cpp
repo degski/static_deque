@@ -32,6 +32,7 @@
 #include <random>
 #include <string>
 #include <type_traits>
+#include <variant>
 
 #include <sax/splitmix.hpp>
 #include <sax/uniform_int_distribution.hpp>
@@ -57,17 +58,29 @@ void handleEptr ( std::exception_ptr eptr ) { // Passing by value is ok.
 
 int counter = 0;
 
+template<typename T>
+using unique_weak_ptr = std::variant<std::unique_ptr<T>, T *>;
+
+template<typename... Ts>
+struct overloaded : Ts... {
+    using Ts::operator( )...;
+};
+template<typename... Ts>
+overloaded ( Ts... ) -> overloaded<Ts...>;
+
 template<std::size_t N, std::size_t alignment = alignof ( std::max_align_t )>
 struct chunk {
-    using chunk_sptr = std::unique_ptr<chunk>;
+    using chunk_uptr = std::unique_ptr<chunk>;
     static_assert ( N > 16, "chunk: N is too small" );
     static constexpr std::size_t char_size = N - 3 * sizeof ( char * );
     alignas ( alignment ) char m_buf[ char_size ];
-    char * m_ptr                  = nullptr;
-    std::unique_ptr<chunk> m_next = nullptr;
-    int c                         = counter++;
+    char * m_ptr = nullptr;
+    unique_weak_ptr<chunk> m_next;
+    int c = counter++;
 
-    constexpr chunk ( ) noexcept { std::cout << "c'tor " << c << " called" << nl; };
+    constexpr chunk ( ) noexcept : m_next ( std::in_place_type_t<chunk *> ( ), nullptr ) {
+        std::cout << "c'tor " << c << " called" << nl;
+    };
 
     ~chunk ( ) noexcept { std::cout << "d'tor " << c << " called" << nl; }
 
@@ -101,21 +114,57 @@ class mempool {
 
     using chunk      = chunk<ChunkSize, alignof ( value_type )>;
     using chunk_ptr  = chunk *;
-    using chunk_sptr = std::unique_ptr<chunk>;
+    using chunk_uptr = std::unique_ptr<chunk>;
+    using chunk_sptr = unique_weak_ptr<chunk>; // smarter.
 
     static constexpr size_type chunck_size = static_cast<size_type> ( chunk::capacity ( ) / sizeof ( value_type ) );
 
-    std::unique_ptr<chunk> m_data;
+    chunk_sptr m_data;
     chunk_ptr m_last_data = nullptr;
+
+    chunk_ptr last ( ) const noexcept {
+        chunk_ptr ptr = as_raw ( m_data );
+        if ( ptr )
+            while ( is_chunk_uptr ( ptr->m_next ) )
+                ptr = as_raw<chunk_uptr> ( ptr->m_next );
+        return ptr;
+    }
+
+    template<typename T = void>
+    [[nodiscard]] constexpr chunk_ptr as_raw ( chunk_sptr const & sp_ ) const noexcept {
+        if constexpr ( std::is_same<chunk_uptr, T>::value ) {
+            return std::get<T> ( sp_ ).get ( );
+        }
+        else if constexpr ( std::is_same<chunk_ptr, T>::value ) {
+            return std::get<T> ( sp_ );
+        }
+        else {
+            chunk_ptr v = nullptr;
+            std::visit (
+                overloaded{ [ &v ] ( chunk_uptr const & arg ) { v = arg.get ( ); }, [ &v ] ( chunk_ptr const & arg ) { v = arg; } },
+                sp_ );
+            assert ( v );
+            return v;
+        }
+    }
+
+    [[nodiscard]] constexpr bool is_chunk_ptr ( unique_weak_ptr<chunk> const & sp_ ) const noexcept {
+        return std::holds_alternative<chunk_ptr> ( sp_ );
+    }
+    [[nodiscard]] constexpr bool is_chunk_uptr ( unique_weak_ptr<chunk> const & sp_ ) const noexcept {
+        return std::holds_alternative<chunk_uptr> ( sp_ );
+    }
 
     void grow ( ) noexcept {
         if ( m_last_data ) {
-            m_last_data->m_next = std::make_unique<chunk> ( );
-            m_last_data         = m_last_data->m_next.get ( );
+            m_last_data->m_next = std::make_unique<chunk> ( ); // Constuct new chunk.
+            m_last_data         = as_raw<chunk_uptr> ( m_last_data->m_next );
+            m_last_data->m_next = as_raw<chunk_uptr> ( m_data ); // Set next to raw-pointer data, which is begin.
         }
         else {
-            m_data      = std::make_unique<chunk> ( );
-            m_last_data = m_data.get ( );
+            m_data              = std::make_unique<chunk> ( );
+            m_last_data         = as_raw<chunk_uptr> ( m_data );
+            m_last_data->m_next = m_last_data; // Circular list.
         }
     }
 
