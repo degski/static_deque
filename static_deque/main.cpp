@@ -191,6 +191,10 @@ class mempool {
         return std::make_unique<aligned_stack_storage> ( );
     }
 
+    [[nodiscard]] static constexpr chk_unique_raw_ptr chk_allocate ( chk_unique_raw_ptr && p_ ) noexcept {
+        return std::make_unique<aligned_stack_storage> ( std::move ( p_ ) );
+    }
+
     template<typename T = void>
     [[nodiscard]] constexpr chk_raw_ptr chk_raw ( chk_unique_raw_ptr const & sp_ ) const noexcept {
         if constexpr ( std::is_same<chk_unique_ptr, T>::value ) {
@@ -235,13 +239,22 @@ class mempool {
         }
     }
 
+    [[nodiscard]] chk_raw_ptr chk_leaf ( ) const noexcept {
+        chk_raw_ptr n = chk_raw ( std::get<chk_unique_ptr> ( m_last_data ) );
+        while ( is_chk_unique_ptr ( n->m_next ) )
+            n = chk_raw<chk_unique_ptr> ( n->m_next );
+        return n;
+    }
+
     void grow ( ) noexcept {
         if ( chk_raw ( m_last_data ) ) {
 
             chk_unique_raw_ptr p = std::move ( std::get<chk_unique_ptr> ( m_last_data )->m_next ); // Where was it pointing to.
-            std::get<chk_unique_ptr> ( m_last_data )->m_next =
-                chk_allocate ( ); // Constuct new aligned_stack_storage, and move into m_next.
 
+            std::get<chk_unique_ptr> ( m_last_data )->m_next =
+                chk_allocate ( std::move ( p ) ); // Constuct new aligned_stack_storage, and move into m_next.
+            // chk_unique_raw_ptr last = chk_first_raw_next_ptr ( ); // Pointer to object having a chk_raw_ptr
+            // swap_types ( *last, m_last_data )
             /*
 
             m_last_data         = chk_raw<chk_unique_ptr> ( m_last_data->m_next );
