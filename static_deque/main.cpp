@@ -126,22 +126,30 @@ struct aligned_stack_storage {
     using chk_unique_ptr     = std::unique_ptr<aligned_stack_storage>;
     using chk_unique_raw_ptr = unique_raw_ptr<aligned_stack_storage>;
 
-    static constexpr std::size_t char_size = N - 2 * sizeof ( char * );
+    explicit constexpr aligned_stack_storage ( ) noexcept { std::cout << "c'tor " << c << " called" << nl; };
+    aligned_stack_storage ( aligned_stack_storage const & )     = delete;
+    aligned_stack_storage ( aligned_stack_storage && ) noexcept = delete;
 
-    alignas ( static_cast<std::size_t> ( Align ) ) char m_storage[ char_size ];
-    unique_raw_ptr<aligned_stack_storage> m_next;
-    int c = counter++;
-
-    constexpr aligned_stack_storage ( ) noexcept { std::cout << "c'tor " << c << " called" << nl; };
-    constexpr aligned_stack_storage ( chk_unique_raw_ptr && p_ ) noexcept : m_next ( std::move ( p_ ) ) {
+    explicit constexpr aligned_stack_storage ( chk_unique_raw_ptr && p_ ) noexcept : m_next ( std::move ( p_ ) ) {
+        std::cout << "c'tor (m_next moved in) " << c << " called" << nl;
+    };
+    explicit constexpr aligned_stack_storage ( chk_unique_ptr && p_ ) noexcept : m_next ( std::move ( p_ ) ) {
         std::cout << "c'tor (m_next moved in) " << c << " called" << nl;
     };
 
-    void reset ( ) {}
-
     ~aligned_stack_storage ( ) noexcept { std::cout << "d'tor " << c << " called" << nl; }
 
+    aligned_stack_storage & operator= ( aligned_stack_storage const & ) = delete;
+    aligned_stack_storage & operator= ( aligned_stack_storage && ) = delete;
+
     static constexpr std::size_t capacity ( ) noexcept { return char_size; };
+
+    static constexpr std::size_t char_size = N - 2 * sizeof ( char * );
+
+    private:
+    alignas ( static_cast<std::size_t> ( Align ) ) char m_storage[ char_size ];
+    unique_raw_ptr<aligned_stack_storage> m_next;
+    int c = counter++;
 };
 
 template<typename Type, typename SizeType, std::size_t ChunkSize = 512u>
@@ -177,17 +185,13 @@ class mempool {
     static constexpr size_type chunck_size = static_cast<size_type> ( aligned_stack_storage::capacity ( ) / sizeof ( value_type ) );
 
     chk_unique_raw_ptr m_last_data;
-    chk_raw_ptr m_last_data = nullptr;
 
-    [[nodiscard]] static constexpr chk_unique_raw_ptr chk_make_unique ( ) noexcept {
+    [[nodiscard]] static constexpr chk_unique_raw_ptr chk_allocate ( ) noexcept {
         return std::make_unique<aligned_stack_storage> ( );
-    }
-    [[nodiscard]] static constexpr chk_unique_raw_ptr chk_make_unique ( chk_raw_ptr p_ ) noexcept {
-        return std::make_unique<aligned_stack_storage> ( p_ );
     }
 
     template<typename T = void>
-    [[nodiscard]] constexpr chk_raw_ptr chk_make_raw ( chk_unique_raw_ptr const & sp_ ) const noexcept {
+    [[nodiscard]] constexpr chk_raw_ptr chk_raw ( chk_unique_raw_ptr const & sp_ ) const noexcept {
         if constexpr ( std::is_same<chk_unique_ptr, T>::value ) {
             return std::get<T> ( sp_ ).get ( );
         }
@@ -215,7 +219,7 @@ class mempool {
     // Swap the containing type, between 2 chk_unique_raw_ptr's, pointing at the same value.
     void swap_types ( chk_unique_raw_ptr & p0_, chk_unique_raw_ptr & p1_ ) noexcept {
         // So never an object goes out of scope and never an object is held twice.
-        assert ( chk_make_raw ( p0_ ) == chk_make_raw ( p1_ ) );
+        assert ( chk_raw ( p0_ ) == chk_raw ( p1_ ) );
         bool const i0 = is_chk_raw_ptr ( p0_ );
         if ( i0 != is_chk_raw_ptr ( p1_ ) ) {
             if ( i0 ) // rp, up.
@@ -229,15 +233,19 @@ class mempool {
     }
 
     void grow ( ) noexcept {
-        if ( m_last_data ) {
-            m_last_data->m_next = chk_make_unique ( ); // Constuct new aligned_stack_storage.
-            m_last_data         = chk_make_raw<chk_unique_ptr> ( m_last_data->m_next );
-            m_last_data->m_next = chk_make_raw<chk_unique_ptr> ( m_data ); // Set next to raw-pointer data, which is begin.
+        if ( chk_raw ( m_last_data ) ) {
+            /*
+            m_last_data->m_next = chk_allocate ( ); // Constuct new aligned_stack_storage.
+            m_last_data         = chk_raw<chk_unique_ptr> ( m_last_data->m_next );
+            m_last_data->m_next = chk_raw<chk_unique_ptr> ( m_data ); // Set next to raw-pointer data, which is begin.
+            */
         }
         else {
-            m_data              = chk_make_unique ( );
-            m_last_data         = chk_make_raw<chk_unique_ptr> ( m_data );
+            /*
+            m_last_data         = chk_allocate ( );
+            m_last_data         = chk_raw<chk_unique_ptr> ( m_data );
             m_last_data->m_next = m_last_data; // Circular list.
+            */
         }
     }
 
