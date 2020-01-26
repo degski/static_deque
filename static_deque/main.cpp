@@ -59,7 +59,9 @@ void handleEptr ( std::exception_ptr eptr ) { // Passing by value is ok.
 int counter = 0;
 
 template<typename T>
-using unique_weak_ptr = std::variant<std::unique_ptr<T>, T *>;
+using unique_raw_ptr = std::variant<std::unique_ptr<T>, T *>;
+
+// To use with lambda type matching for std::variant.
 
 template<typename... Ts>
 struct overloaded : Ts... {
@@ -118,21 +120,26 @@ struct wobble_ptr {
             delete m_raw;
     }
 };
-template<std::size_t N, std::size_t alignment = alignof ( std::max_align_t )>
-struct chunk {
-    using chunk_uptr = std::unique_ptr<chunk>;
-    static_assert ( N > 16, "chunk: N is too small" );
-    static constexpr std::size_t char_size = N - 3 * sizeof ( char * );
-    alignas ( alignment ) char m_buf[ char_size ];
-    char * m_ptr = nullptr;
-    unique_weak_ptr<chunk> m_next;
+template<std::size_t N, std::align_val_t Align = static_cast<std::align_val_t> ( alignof ( std::max_align_t ) )>
+struct aligned_stack_storage {
+
+    using chk_unique_ptr     = std::unique_ptr<aligned_stack_storage>;
+    using chk_unique_raw_ptr = unique_raw_ptr<aligned_stack_storage>;
+
+    static constexpr std::size_t char_size = N - 2 * sizeof ( char * );
+
+    alignas ( static_cast<std::size_t> ( Align ) ) char m_storage[ char_size ];
+    unique_raw_ptr<aligned_stack_storage> m_next;
     int c = counter++;
 
-    constexpr chunk ( ) noexcept : m_next ( std::in_place_type_t<chunk *> ( ), nullptr ) {
-        std::cout << "c'tor " << c << " called" << nl;
+    constexpr aligned_stack_storage ( ) noexcept { std::cout << "c'tor " << c << " called" << nl; };
+    constexpr aligned_stack_storage ( chk_unique_raw_ptr && p_ ) noexcept : m_next ( std::move ( p_ ) ) {
+        std::cout << "c'tor (m_next moved in) " << c << " called" << nl;
     };
 
-    ~chunk ( ) noexcept { std::cout << "d'tor " << c << " called" << nl; }
+    void reset ( ) {}
+
+    ~aligned_stack_storage ( ) noexcept { std::cout << "d'tor " << c << " called" << nl; }
 
     static constexpr std::size_t capacity ( ) noexcept { return char_size; };
 };
@@ -162,64 +169,94 @@ class mempool {
     using void_ptr = void *;
     using char_ptr = char *;
 
-    using chunk      = chunk<ChunkSize, alignof ( value_type )>;
-    using chunk_ptr  = chunk *;
-    using chunk_uptr = std::unique_ptr<chunk>;
-    using chunk_sptr = unique_weak_ptr<chunk>; // smarter.
+    using aligned_stack_storage = aligned_stack_storage<ChunkSize, static_cast<std::align_val_t> ( alignof ( value_type ) )>;
+    using chk_raw_ptr           = aligned_stack_storage *;
+    using chk_unique_ptr        = std::unique_ptr<aligned_stack_storage>;
+    using chk_unique_raw_ptr    = unique_raw_ptr<aligned_stack_storage>; // smarter.
 
-    static constexpr size_type chunck_size = static_cast<size_type> ( chunk::capacity ( ) / sizeof ( value_type ) );
+    static constexpr size_type chunck_size = static_cast<size_type> ( aligned_stack_storage::capacity ( ) / sizeof ( value_type ) );
 
-    chunk_sptr m_data;
-    chunk_ptr m_last_data = nullptr;
+    chk_unique_raw_ptr m_last_data;
+    chk_raw_ptr m_last_data = nullptr;
 
-    chunk_ptr last ( ) const noexcept {
-        chunk_ptr ptr = as_raw ( m_data );
-        if ( ptr )
-            while ( is_chunk_uptr ( ptr->m_next ) )
-                ptr = as_raw<chunk_uptr> ( ptr->m_next );
-        return ptr;
+    [[nodiscard]] static constexpr chk_unique_raw_ptr chk_make_unique ( ) noexcept {
+        return std::make_unique<aligned_stack_storage> ( );
+    }
+    [[nodiscard]] static constexpr chk_unique_raw_ptr chk_make_unique ( chk_raw_ptr p_ ) noexcept {
+        return std::make_unique<aligned_stack_storage> ( p_ );
     }
 
     template<typename T = void>
-    [[nodiscard]] constexpr chunk_ptr as_raw ( chunk_sptr const & sp_ ) const noexcept {
-        if constexpr ( std::is_same<chunk_uptr, T>::value ) {
+    [[nodiscard]] constexpr chk_raw_ptr chk_make_raw ( chk_unique_raw_ptr const & sp_ ) const noexcept {
+        if constexpr ( std::is_same<chk_unique_ptr, T>::value ) {
             return std::get<T> ( sp_ ).get ( );
         }
-        else if constexpr ( std::is_same<chunk_ptr, T>::value ) {
+        else if constexpr ( std::is_same<chk_raw_ptr, T>::value ) {
             return std::get<T> ( sp_ );
         }
         else {
-            chunk_ptr v = nullptr;
-            std::visit (
-                overloaded{ [ &v ] ( chunk_uptr const & arg ) { v = arg.get ( ); }, [ &v ] ( chunk_ptr const & arg ) { v = arg; } },
-                sp_ );
+            chk_raw_ptr v = nullptr;
+            std::visit ( overloaded{ [ &v ] ( chk_unique_ptr const & arg ) { v = arg.get ( ); },
+                                     [ &v ] ( chk_raw_ptr const & arg ) { v = arg; } },
+                         sp_ );
             assert ( v );
             return v;
         }
     }
 
-    [[nodiscard]] constexpr bool is_chunk_ptr ( unique_weak_ptr<chunk> const & sp_ ) const noexcept {
-        return std::holds_alternative<chunk_ptr> ( sp_ );
+    [[nodiscard]] constexpr bool is_chk_unique_ptr ( chk_unique_raw_ptr const & sp_ ) const noexcept {
+        return std::holds_alternative<chk_unique_ptr> ( sp_ );
     }
-    [[nodiscard]] constexpr bool is_chunk_uptr ( unique_weak_ptr<chunk> const & sp_ ) const noexcept {
-        return std::holds_alternative<chunk_uptr> ( sp_ );
+
+    [[nodiscard]] constexpr bool is_chk_raw_ptr ( chk_unique_raw_ptr const & sp_ ) const noexcept {
+        return std::holds_alternative<chk_raw_ptr> ( sp_ );
+    }
+
+    // Swap the containing type, between 2 chk_unique_raw_ptr's, pointing at the same value.
+    void swap_types ( chk_unique_raw_ptr & p0_, chk_unique_raw_ptr & p1_ ) noexcept {
+        // So never an object goes out of scope and never an object is held twice.
+        assert ( chk_make_raw ( p0_ ) == chk_make_raw ( p1_ ) );
+        bool const i0 = is_chk_raw_ptr ( p0_ );
+        if ( i0 != is_chk_raw_ptr ( p1_ ) ) {
+            if ( i0 ) // rp, up.
+                p1_ = std::get<chk_unique_ptr> ( p0_ = std::get<chk_unique_ptr> ( p1_ ) ).get ( );
+            else // up, rp.
+                p0_ = std::get<chk_unique_ptr> ( p1_ = std::get<chk_unique_ptr> ( p0_ ) ).get ( );
+        }
+        else {
+            // Nothing to be done.
+        }
     }
 
     void grow ( ) noexcept {
         if ( m_last_data ) {
-            m_last_data->m_next = std::make_unique<chunk> ( ); // Constuct new chunk.
-            m_last_data         = as_raw<chunk_uptr> ( m_last_data->m_next );
-            m_last_data->m_next = as_raw<chunk_uptr> ( m_data ); // Set next to raw-pointer data, which is begin.
+            m_last_data->m_next = chk_make_unique ( ); // Constuct new aligned_stack_storage.
+            m_last_data         = chk_make_raw<chk_unique_ptr> ( m_last_data->m_next );
+            m_last_data->m_next = chk_make_raw<chk_unique_ptr> ( m_data ); // Set next to raw-pointer data, which is begin.
         }
         else {
-            m_data              = std::make_unique<chunk> ( );
-            m_last_data         = as_raw<chunk_uptr> ( m_data );
+            m_data              = chk_make_unique ( );
+            m_last_data         = chk_make_raw<chk_unique_ptr> ( m_data );
             m_last_data->m_next = m_last_data; // Circular list.
         }
     }
 
     pointer m_front = nullptr, m_back = nullptr;
 };
+
+int main565765 ( ) {
+
+    std::exception_ptr eptr;
+
+    try {
+    }
+    catch ( ... ) {
+        eptr = std::current_exception ( ); // Capture.
+    }
+    handleEptr ( eptr );
+
+    return EXIT_SUCCESS;
+}
 
 int main ( ) {
 

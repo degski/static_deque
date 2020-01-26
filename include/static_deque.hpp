@@ -33,8 +33,6 @@
 #include <string>
 #include <type_traits>
 
-#include <sax/short_alloc.hpp>
-
 #include <experimental/fixed_capacity_vector>
 
 #pragma once
@@ -60,108 +58,71 @@ constexpr bool is_power_2 ( T const n_ ) noexcept {
     return n_ and not( n_ & ( n_ - 1 ) );
 }
 
-template<std::size_t N /* the total size */, std::size_t alignment = alignof ( std::max_align_t )>
-class arena {
+template<std::size_t Size, std::size_t Align = alignof ( std::max_align_t )>
+struct aligned_stack_storage_ {
 
-    static_assert ( N > 16, "arena: N is too small" );
-
-    alignas ( alignment ) char buf_[ N - 2 * sizeof ( char * ) ];
-    char *ptr_, *next_ = nullptr;
+    alignas ( Align ) char m_storage[ Size ];
 
     public:
-    ~arena ( ) { ptr_ = nullptr; }
-    arena ( ) noexcept : ptr_ ( buf_ ) {}
+    aligned_stack_storage_ ( aligned_stack_storage_ const & ) = delete;
+    aligned_stack_storage_ & operator= ( aligned_stack_storage_ const & ) = delete;
 
-    arena ( const arena & ) = delete;
-    arena & operator= ( const arena & ) = delete;
-
-    template<std::size_t ReqAlign>
-    char * allocate ( std::size_t n );
-    void deallocate ( char * p, std::size_t n ) noexcept;
-
-    static constexpr std::size_t size ( ) noexcept { return N; }
-    std::size_t used ( ) const noexcept { return static_cast<std::size_t> ( ptr_ - buf_ ); }
-    void reset ( ) noexcept { ptr_ = buf_; }
+    [[nodiscard]] char * allocate ( std::size_t n ) noexcept { return m_storage; };
+    void deallocate ( char * p, std::size_t n ) noexcept { assert ( pointer_in_buffer ( p ) ); }
 
     private:
-    static std::size_t align_up ( std::size_t n ) noexcept { return ( n + ( alignment - 1 ) ) & ~( alignment - 1 ); }
-
-    bool pointer_in_buffer ( char * p ) noexcept { return buf_ <= p && p <= buf_ + N; }
+    [[nodiscard]] bool pointer_in_buffer ( char * p ) const noexcept { return m_storage <= p and p <= m_storage + Size; }
 };
 
-template<std::size_t N, std::size_t alignment>
-template<std::size_t ReqAlign>
-char * arena<N, alignment>::allocate ( std::size_t n ) {
-    static_assert ( ReqAlign <= alignment, "alignment is too small for this arena" );
-    assert ( pointer_in_buffer ( ptr_ ) && "short_alloc has outlived arena" );
-    auto const aligned_n = align_up ( n );
-    if ( static_cast<decltype ( aligned_n )> ( buf_ + N - ptr_ ) >= aligned_n ) {
-        char * r = ptr_;
-        ptr_ += aligned_n;
-        return r;
-    }
-    static_assert ( alignment <= alignof ( std::max_align_t ), "you've chosen an "
-                                                               "alignment that is larger than alignof(std::max_align_t), and "
-                                                               "cannot be guaranteed by normal operator new" );
-    return nullptr;
-}
+template<class Type, std::size_t Size, std::size_t Align = alignof ( std::max_align_t )>
+class stack_allocator {
 
-template<std::size_t N, std::size_t alignment>
-void arena<N, alignment>::deallocate ( char * p, std::size_t n ) noexcept {
-    assert ( pointer_in_buffer ( ptr_ ) && "short_alloc has outlived arena" );
-    if ( pointer_in_buffer ( p ) ) {
-        n = align_up ( n );
-        if ( p + n == ptr_ )
-            ptr_ = p;
-    }
-}
-
-template<class T, std::size_t N, std::size_t Align = alignof ( std::max_align_t )>
-class short_alloc {
     public:
-    using value_type                             = T;
-    using propagate_on_container_copy_assignment = std::true_type;
-    using propagate_on_container_move_assignment = std::true_type;
-    using propagate_on_container_swap            = std::true_type;
-    using is_always_equal                        = std::true_type;
+    using value_type                             = Type;
+    using propagate_on_container_copy_assignment = std::false_type;
+    using propagate_on_container_move_assignment = std::false_type;
+    using propagate_on_container_swap            = std::false_type;
+    using is_always_equal                        = std::false_type;
 
     static auto constexpr alignment = Align;
-    static auto constexpr size      = N;
-    using arena_type                = arena<size, alignment>;
+    static auto constexpr size      = Size;
+    using storage_type              = aligned_stack_storage_<size, alignment>;
 
     private:
-    arena_type & a_;
+    storage_type & a_;
 
     public:
-    short_alloc ( const short_alloc & ) = default;
-    short_alloc & operator= ( const short_alloc & ) = delete;
+    stack_allocator ( stack_allocator const & ) = delete;
 
-    short_alloc ( arena_type & a ) noexcept : a_ ( a ) {
-        static_assert ( size % alignment == 0, "size N needs to be a multiple of alignment Align" );
+    stack_allocator & operator= ( stack_allocator const & ) = delete;
+
+    stack_allocator ( storage_type & a ) noexcept : a_ ( a ) {
+        static_assert ( size % alignment == 0, "size Size needs to be a multiple of alignment Align" );
     }
+
     template<class U>
-    short_alloc ( const short_alloc<U, N, alignment> & a ) noexcept : a_ ( a.a_ ) {}
+    stack_allocator ( const stack_allocator<U, Size, alignment> & a ) noexcept : a_ ( a.a_ ) {}
 
     template<class _Up>
     struct rebind {
-        using other = short_alloc<_Up, N, alignment>;
+        using other = stack_allocator<_Up, Size, alignment>;
     };
 
-    T * allocate ( std::size_t n ) { return reinterpret_cast<T *> ( a_.template allocate<alignof ( T )> ( n * sizeof ( T ) ) ); }
-    void deallocate ( T * p, std::size_t n ) noexcept { a_.deallocate ( reinterpret_cast<char *> ( p ), n * sizeof ( T ) ); }
+    Type * allocate ( std::size_t n ) { return reinterpret_cast<Type *> ( a_.allocate ( n * sizeof ( Type ) ) ); }
+    void deallocate ( Type * p, std::size_t n ) noexcept { a_.deallocate ( reinterpret_cast<char *> ( p ), n * sizeof ( Type ) ); }
 
     template<std::size_t A1, class U, std::size_t M, std::size_t A2>
-    friend inline bool operator== ( const sax::short_alloc<T, N, A1> & x, const sax::short_alloc<U, M, A2> & y ) noexcept {
-        return N == M && A1 == A2 && &x.a_ == &y.a_;
+    friend inline bool operator== ( stack_allocator<Type, Size, A1> const & x, stack_allocator<U, M, A2> const & y ) noexcept {
+        return Size == M && A1 == A2 && &x.a_ == &y.a_;
     }
 
     template<std::size_t A1, class U, std::size_t M, std::size_t A2>
-    friend inline bool operator!= ( const sax::short_alloc<T, N, A1> & x, const sax::short_alloc<U, M, A2> & y ) noexcept {
+    friend inline bool operator!= ( stack_allocator<Type, Size, A1> const & x, stack_allocator<U, M, A2> const & y ) noexcept {
         return !( x == y );
     }
 
     template<class U, std::size_t M, std::size_t A>
-    friend class short_alloc;
+    friend class stack_allocator;
 };
 
 template<typename Type, typename SizeType, std::size_t ChunkSize = 512u>
