@@ -126,7 +126,9 @@ struct aligned_stack_storage {
     using chk_unique_ptr     = std::unique_ptr<aligned_stack_storage>;
     using chk_unique_raw_ptr = unique_raw_ptr<aligned_stack_storage>;
 
-    explicit constexpr aligned_stack_storage ( ) noexcept { std::cout << "c'tor " << c << " called" << nl; };
+    explicit constexpr aligned_stack_storage ( ) noexcept : m_next ( std::in_place_type_t<aligned_stack_storage *> ( ), this ) {
+        std::cout << "c'tor " << c << " called" << nl;
+    };
     aligned_stack_storage ( aligned_stack_storage const & )     = delete;
     aligned_stack_storage ( aligned_stack_storage && ) noexcept = delete;
 
@@ -146,7 +148,6 @@ struct aligned_stack_storage {
 
     static constexpr std::size_t char_size = N - 2 * sizeof ( char * );
 
-    private:
     alignas ( static_cast<std::size_t> ( Align ) ) char m_storage[ char_size ];
     unique_raw_ptr<aligned_stack_storage> m_next;
     int c = counter++;
@@ -208,6 +209,8 @@ class mempool {
         }
     }
 
+    [[nodiscard]] constexpr chk_raw_ptr chk_raw ( chk_unique_ptr const & sp_ ) const noexcept { return sp_.get ( ); }
+
     [[nodiscard]] constexpr bool is_chk_unique_ptr ( chk_unique_raw_ptr const & sp_ ) const noexcept {
         return std::holds_alternative<chk_unique_ptr> ( sp_ );
     }
@@ -234,18 +237,19 @@ class mempool {
 
     void grow ( ) noexcept {
         if ( chk_raw ( m_last_data ) ) {
+
+            chk_unique_raw_ptr p = std::move ( std::get<chk_unique_ptr> ( m_last_data )->m_next ); // Where was it pointing to.
+            std::get<chk_unique_ptr> ( m_last_data )->m_next =
+                chk_allocate ( ); // Constuct new aligned_stack_storage, and move into m_next.
+
             /*
-            m_last_data->m_next = chk_allocate ( ); // Constuct new aligned_stack_storage.
+
             m_last_data         = chk_raw<chk_unique_ptr> ( m_last_data->m_next );
             m_last_data->m_next = chk_raw<chk_unique_ptr> ( m_data ); // Set next to raw-pointer data, which is begin.
             */
         }
         else {
-            /*
-            m_last_data         = chk_allocate ( );
-            m_last_data         = chk_raw<chk_unique_ptr> ( m_data );
-            m_last_data->m_next = m_last_data; // Circular list.
-            */
+            m_last_data = chk_allocate ( );
         }
     }
 
