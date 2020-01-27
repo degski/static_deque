@@ -224,26 +224,27 @@ class mempool {
     }
 
     // Swap the containing type, between 2 chk_unique_raw_ptr's, pointing at the same value.
-    void swap_types ( chk_unique_raw_ptr & p0_, chk_unique_raw_ptr & p1_ ) noexcept {
+    void swap_types ( chk_unique_raw_ptr & p0_, chk_unique_raw_ptr & p1_ ) const noexcept {
         // So never an object goes out of scope and never an object is held twice.
         assert ( chk_raw ( p0_ ) == chk_raw ( p1_ ) );
         bool const i0 = is_chk_raw_ptr ( p0_ );
         if ( i0 != is_chk_raw_ptr ( p1_ ) ) {
-            if ( i0 ) // rp, up.
-                p1_ = std::get<chk_unique_ptr> ( p0_ = std::get<chk_unique_ptr> ( p1_ ) ).get ( );
+            if ( i0 ) { // rp, up.
+                p1_ = std::get<chk_unique_ptr> ( p0_ = std::move ( std::get<chk_unique_ptr> ( p1_ ) ) ).get ( );
+            }
             else // up, rp.
-                p0_ = std::get<chk_unique_ptr> ( p1_ = std::get<chk_unique_ptr> ( p0_ ) ).get ( );
+                p0_ = std::get<chk_unique_ptr> ( p1_ = std::move ( std::get<chk_unique_ptr> ( p0_ ) ) ).get ( );
         }
         else {
             // Nothing to be done.
         }
     }
 
-    [[nodiscard]] chk_raw_ptr chk_leaf ( ) const noexcept {
-        chk_raw_ptr n = chk_raw ( std::get<chk_unique_ptr> ( m_last_data ) );
+    [[nodiscard]] chk_unique_raw_ptr & chk_leaf ( ) const noexcept {
+        chk_raw_ptr n = chk_raw<chk_unique_ptr> ( m_last_data ); // !!!!
         while ( is_chk_unique_ptr ( n->m_next ) )
             n = chk_raw<chk_unique_ptr> ( n->m_next );
-        return n;
+        return n->m_next;
     }
 
     void grow ( ) noexcept {
@@ -253,13 +254,8 @@ class mempool {
 
             std::get<chk_unique_ptr> ( m_last_data )->m_next =
                 chk_allocate ( std::move ( p ) ); // Constuct new aligned_stack_storage, and move into m_next.
-            // chk_unique_raw_ptr last = chk_first_raw_next_ptr ( ); // Pointer to object having a chk_raw_ptr
-            // swap_types ( *last, m_last_data )
-            /*
-
-            m_last_data         = chk_raw<chk_unique_ptr> ( m_last_data->m_next );
-            m_last_data->m_next = chk_raw<chk_unique_ptr> ( m_data ); // Set next to raw-pointer data, which is begin.
-            */
+            swap_types ( chk_leaf ( ), m_last_data );
+            // Move last forward.
         }
         else {
             m_last_data = chk_allocate ( );
