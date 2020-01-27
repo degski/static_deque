@@ -252,7 +252,7 @@ struct aligned_stack_storage {
     aligned_stack_storage ( aligned_stack_storage && ) noexcept = delete;
 
     template<typename U>
-    explicit aligned_stack_storage ( unique_ptr<U> && p_ ) noexcept : m_next ( std::move ( p_ ) ) {
+    explicit constexpr aligned_stack_storage ( unique_ptr<U> && p_ ) noexcept : m_next ( std::move ( p_ ) ) {
         std::cout << "c'tor (m_next moved in) " << c << " called" << nl;
     };
 
@@ -308,25 +308,21 @@ class mempool {
         return make_unique<aligned_stack_storage> ( std::move ( p_ ) );
     }
 
-    // Swap the containing type, between 2 unique_ptr's.
-    static constexpr void swap_ownership ( unique_ptr & p0_, unique_ptr & p1_ ) noexcept { p0_.swap_ownership ( p1_ ); }
-
     void grow ( ) noexcept {
-        auto leaf = [ this ] ( ) -> unique_ptr & {
+
+        auto back_next = [ this ] ( ) -> unique_ptr & {
             aligned_stack_storage_ptr n = m_last_data.get ( );
             while ( n->m_next.is_unique ( ) )
                 n = n->m_next.get ( );
             return n->m_next;
         };
-        if ( m_last_data ) {
-            m_last_data->m_next = mempool::allocate (
-                std::move ( m_last_data->m_next ) ); // Constuct new aligned_stack_storage, and move into m_next.
 
-            swap_ownership ( leaf ( ), m_last_data );
-            // Move last forward.
+        if ( m_last_data ) {
+            auto & leaf = back_next ( );
+            leaf        = mempool::allocate ( std::move ( leaf ) );
         }
         else {
-            m_last_data = allocate ( );
+            m_last_data = mempool::allocate ( );
         }
     }
 
