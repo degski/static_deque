@@ -148,8 +148,8 @@ class unique_ptr {
         delete v ( result );
     }
 
-    void make_weak ( ) noexcept { m_raw = v ( m_raw ) | one_mask; }
-    void make_unique ( ) noexcept { m_raw &= ptr_mask; }
+    void weakify ( ) noexcept { m_raw = v ( m_raw ) | one_mask; }
+    void uniquify ( ) noexcept { m_raw &= ptr_mask; }
 
     void swap_ownership ( unique_ptr & other_ ) noexcept {
         auto flip = [] ( unique_ptr & u ) { u.m_raw |= one_mask; };
@@ -245,7 +245,7 @@ struct aligned_stack_storage {
     explicit constexpr aligned_stack_storage ( ) noexcept : m_next ( this ) {
         std::cout << "c'tor " << c << " called" << nl;
         // An object cannot own itself.
-        m_next.make_weak ( );
+        m_next.weakify ( );
     };
     aligned_stack_storage ( aligned_stack_storage const & )     = delete;
     aligned_stack_storage ( aligned_stack_storage && ) noexcept = delete;
