@@ -249,11 +249,8 @@ class mempool {
 
     void grow ( ) noexcept {
         if ( chk_raw ( m_last_data ) ) {
-
-            chk_unique_raw_ptr p = std::move ( std::get<chk_unique_ptr> ( m_last_data )->m_next ); // Where was it pointing to.
-
-            std::get<chk_unique_ptr> ( m_last_data )->m_next =
-                chk_allocate ( std::move ( p ) ); // Constuct new aligned_stack_storage, and move into m_next.
+            std::get<chk_unique_ptr> ( m_last_data )->m_next = chk_allocate (
+                std::get<chk_unique_ptr> ( m_last_data )->m_next ); // Constuct new aligned_stack_storage, and move into m_next.
             swap_types ( chk_leaf ( ), m_last_data );
             // Move last forward.
         }
