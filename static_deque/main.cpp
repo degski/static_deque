@@ -308,12 +308,13 @@ class mempool {
         return make_unique<aligned_stack_storage> ( std::move ( p_ ) );
     }
 
-    [[nodiscard]] unique_ptr & back_next ( ) const noexcept {
-        aligned_stack_storage_ptr n = m_last_data.get ( );
+    [[nodiscard]] unique_ptr & back_next ( unique_ptr const & ptr_ ) const noexcept {
+        aligned_stack_storage_ptr n = ptr_.get ( );
         while ( n->m_next.is_unique ( ) )
             n = n->m_next.get ( );
         return n->m_next;
     }
+    [[nodiscard]] unique_ptr & back_next ( ) const noexcept { return back_next ( m_last_data ); }
 
     void grow ( ) noexcept {
 
