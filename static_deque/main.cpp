@@ -317,7 +317,7 @@ class mempool {
             return n->m_next;
         };
 
-        if ( m_last_data ) {
+        if ( m_last_data.get ( ) ) {
             auto & leaf = back_next ( );
             leaf        = mempool::allocate ( std::move ( leaf ) );
         }
@@ -328,21 +328,6 @@ class mempool {
 
     pointer m_front = nullptr, m_back = nullptr;
 };
-
-int main657565 ( ) {
-
-    std::exception_ptr eptr;
-
-    try {
-        unique_ptr<int> p;
-    }
-    catch ( ... ) {
-        eptr = std::current_exception ( ); // Capture.
-    }
-    handleEptr ( eptr );
-
-    return EXIT_SUCCESS;
-}
 
 int main ( ) {
 
@@ -356,11 +341,11 @@ int main ( ) {
 
         std::cout << "leaving scope 1" << nl;
 
-        { pool.grow ( ); }
+        // { pool.grow ( ); }
 
         std::cout << "leaving scope 2" << nl;
 
-        { pool.grow ( ); }
+        /// { pool.grow ( ); }
 
         std::cout << "leaving scope 3" << nl;
     }
@@ -370,6 +355,21 @@ int main ( ) {
     handleEptr ( eptr );
 
     std::cout << "leaving scope 4" << nl;
+
+    return EXIT_SUCCESS;
+}
+
+int main657565 ( ) {
+
+    std::exception_ptr eptr;
+
+    try {
+        unique_ptr<int> p;
+    }
+    catch ( ... ) {
+        eptr = std::current_exception ( ); // Capture.
+    }
+    handleEptr ( eptr );
 
     return EXIT_SUCCESS;
 }
