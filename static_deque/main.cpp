@@ -148,13 +148,14 @@ class unique_ptr {
         delete v ( result );
     }
 
-    void make_weak ( ) noexcept { m_raw |= one_mask; }
+    void make_weak ( ) noexcept { m_raw = v ( m_raw ) | one_mask; }
     void make_unique ( ) noexcept { m_raw &= ptr_mask; }
 
     void swap_ownership ( unique_ptr & other_ ) noexcept {
+        auto flip = [] ( unique_ptr & u ) { u.m_raw |= one_mask; };
         assert ( v ( m_raw ) == v ( other_.m_raw ) );
-        make_weak ( );
-        other_.make_weak ( );
+        flip ( *this );
+        flip ( other_ );
     }
 
     [[nodiscard]] bool is_weak ( ) const noexcept {
