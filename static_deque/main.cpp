@@ -72,21 +72,17 @@ class unique_ptr {
     using reference       = value_type &;
     using const_reference = value_type const &;
 
-    private:
-    pointer m_raw;
-
-    public:
-    unique_ptr ( ) : m_raw ( nullptr ) {}
+    explicit unique_ptr ( ) : m_data ( nullptr ) {}
     // Explicit constructor
-    explicit unique_ptr ( pointer raw ) : m_raw ( raw ) {}
+    explicit unique_ptr ( pointer raw ) : m_data ( raw ) {}
     ~unique_ptr ( ) {
         if ( is_unique ( ) )
-            delete m_raw;
+            delete m_data;
     }
 
     // Constructor/Assignment that binds to nullptr
     // This makes usage with nullptr cleaner
-    unique_ptr ( std::nullptr_t ) : m_raw ( nullptr ) {}
+    unique_ptr ( std::nullptr_t ) : m_data ( nullptr ) {}
     unique_ptr & operator= ( std::nullptr_t ) {
         reset ( );
         return *this;
@@ -117,58 +113,63 @@ class unique_ptr {
     unique_ptr & operator= ( unique_ptr const & ) = delete;
 
     // Const correct access owned object
-    pointer operator-> ( ) const noexcept { return v ( m_raw ); }
-    reference operator* ( ) const { return *v ( m_raw ); }
+    pointer operator-> ( ) const noexcept { return pointer_view ( m_data ); }
+    reference operator* ( ) const { return *pointer_view ( m_data ); }
 
     // Access to smart pointer state
-    pointer get ( ) const noexcept { return v ( m_raw ); }
-    explicit operator bool ( ) const { return v ( m_raw ); }
+    const_pointer get ( ) const noexcept { return pointer_view ( m_data ); }
+    pointer get ( ) noexcept { return pointer_view ( m_data ); }
+    explicit operator bool ( ) const { return pointer_view ( m_data ); }
 
     // Modify object state
     pointer release ( ) noexcept {
         pointer result = nullptr;
-        std::swap ( result, m_raw );
-        return v ( result );
+        std::swap ( result, m_data );
+        return pointer_view ( result );
     }
-    void swap ( unique_ptr & src ) noexcept { std::swap ( m_raw, src.m_raw ); }
+    void swap ( unique_ptr & src ) noexcept { std::swap ( m_data, src.m_data ); }
 
     void reset ( ) noexcept {
         pointer tmp = release ( );
-        delete v ( tmp );
+        delete pointer_view ( tmp );
     }
-    void reset ( pointer ptr = pointer ( ) ) noexcept {
-        pointer result = ptr;
-        std::swap ( result, m_raw );
-        delete v ( result );
+    void reset ( pointer ptr_ = pointer ( ) ) noexcept {
+        pointer result = ptr_;
+        std::swap ( result, m_data );
+        delete pointer_view ( result );
     }
     template<typename U>
-    void reset ( unique_ptr<U> && moving ) noexcept {
-        unique_ptr<T> result ( moving );
+    void reset ( unique_ptr<U> && moving_ ) noexcept {
+        unique_ptr<T> result ( moving_ );
         std::swap ( result, *this );
-        delete v ( result );
+        delete pointer_view ( result );
     }
 
-    void weakify ( ) noexcept { m_raw = v ( m_raw ) | one_mask; }
-    void uniquify ( ) noexcept { m_raw &= ptr_mask; }
+    void weakify ( ) noexcept {
+        m_data = reinterpret_cast<pointer> ( reinterpret_cast<std::uintptr_t> ( pointer_view ( m_data ) ) | one_mask );
+    }
+    void uniquify ( ) noexcept { m_data &= ptr_mask; }
 
     void swap_ownership ( unique_ptr & other_ ) noexcept {
-        auto flip = [] ( unique_ptr & u ) { u.m_raw |= one_mask; };
-        assert ( v ( m_raw ) == v ( other_.m_raw ) );
+        auto flip = [] ( unique_ptr & u ) {
+            u.m_data = reinterpret_cast<pointer> ( reinterpret_cast<std::uintptr_t> ( u.m_data ) | one_mask );
+        };
         flip ( *this );
         flip ( other_ );
     }
 
     [[nodiscard]] bool is_weak ( ) const noexcept {
-        return static_cast<bool> ( reinterpret_cast<std::uintptr_t> ( m_raw ) & one_mask );
+        return static_cast<bool> ( reinterpret_cast<std::uintptr_t> ( m_data ) & one_mask );
     }
     [[nodiscard]] bool is_unique ( ) const noexcept { return not is_weak ( ); }
 
     [[nodiscard]] static constexpr pointer pointer_view ( pointer p_ ) noexcept {
         return reinterpret_cast<pointer> ( reinterpret_cast<std::uintptr_t> ( p_ ) | ptr_mask );
     }
-    [[nodiscard]] static constexpr pointer v ( pointer p_ ) noexcept { return pointer_view ( p_ ); }
 
     private:
+    pointer m_data;
+
     static constexpr std::uintptr_t ptr_mask = 0x00FF'FFFF'FFFF'FFF0;
     static constexpr std::uintptr_t one_mask = 0x0000'0000'0000'0001;
 };
@@ -251,7 +252,7 @@ struct aligned_stack_storage {
     aligned_stack_storage ( aligned_stack_storage && ) noexcept = delete;
 
     template<typename U>
-    explicit constexpr aligned_stack_storage ( unique_ptr<U> && p_ ) noexcept : m_next ( p_ ) {
+    explicit aligned_stack_storage ( unique_ptr<U> && p_ ) noexcept : m_next ( std::move ( p_ ) ) {
         std::cout << "c'tor (m_next moved in) " << c << " called" << nl;
     };
 
@@ -294,31 +295,38 @@ class mempool {
     using void_ptr = void *;
     using char_ptr = char *;
 
-    using aligned_stack_storage = aligned_stack_storage<ChunkSize, static_cast<std::align_val_t> ( alignof ( value_type ) )>;
-    using unique_ptr            = unique_ptr<aligned_stack_storage>;
+    using aligned_stack_storage     = aligned_stack_storage<ChunkSize, static_cast<std::align_val_t> ( alignof ( value_type ) )>;
+    using aligned_stack_storage_ptr = aligned_stack_storage *;
+    using unique_ptr                = unique_ptr<aligned_stack_storage>;
 
     static constexpr size_type chunck_size = static_cast<size_type> ( aligned_stack_storage::capacity ( ) / sizeof ( value_type ) );
 
     unique_ptr m_last_data;
 
-    [[nodiscard]] static constexpr unique_ptr chk_allocate ( ) noexcept { return make_unique<aligned_stack_storage> ( ); }
-    [[nodiscard]] static constexpr unique_ptr chk_allocate ( unique_ptr && p_ ) noexcept {
+    [[nodiscard]] static constexpr unique_ptr allocate ( ) noexcept { return make_unique<aligned_stack_storage> ( ); }
+    [[nodiscard]] static constexpr unique_ptr allocate ( unique_ptr && p_ ) noexcept {
         return make_unique<aligned_stack_storage> ( std::move ( p_ ) );
     }
 
-    // Swap the containing type, between 2 unique_ptr's, pointing at the same value.
-    void swap_types ( unique_ptr & p0_, unique_ptr & p1_ ) const noexcept { p0_.swap_ownership ( p1_ ); }
+    // Swap the containing type, between 2 unique_ptr's.
+    static constexpr void swap_ownership ( unique_ptr & p0_, unique_ptr & p1_ ) noexcept { p0_.swap_ownership ( p1_ ); }
 
     void grow ( ) noexcept {
-
+        auto leaf = [ this ] ( ) -> unique_ptr & {
+            aligned_stack_storage_ptr n = m_last_data.get ( );
+            while ( n->m_next.is_unique ( ) )
+                n = n->m_next.get ( );
+            return n->m_next;
+        };
         if ( m_last_data ) {
-            // std::get<unique_ptr> ( m_last_data )->m_next = chk_allocate (
-            //    std::get<unique_ptr> ( m_last_data )->m_next ); // Constuct new aligned_stack_storage, and move into m_next.
-            // swap_types ( chk_leaf ( ), m_last_data );
+            m_last_data->m_next = mempool::allocate (
+                std::move ( m_last_data->m_next ) ); // Constuct new aligned_stack_storage, and move into m_next.
+
+            swap_ownership ( leaf ( ), m_last_data );
             // Move last forward.
         }
         else {
-            // m_last_data = chk_allocate ( );
+            m_last_data = allocate ( );
         }
     }
 
