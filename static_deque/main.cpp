@@ -117,7 +117,7 @@ class unique_ptr {
     reference operator* ( ) const { return *pointer_view ( m_data ); }
 
     // Access to smart pointer state
-    const_pointer get ( ) const noexcept { return pointer_view ( m_data ); }
+    pointer get ( ) const noexcept { return pointer_view ( m_data ); }
     pointer get ( ) noexcept { return pointer_view ( m_data ); }
     explicit operator bool ( ) const { return pointer_view ( m_data ); }
 
@@ -164,7 +164,7 @@ class unique_ptr {
     [[nodiscard]] bool is_unique ( ) const noexcept { return not is_weak ( ); }
 
     [[nodiscard]] static constexpr pointer pointer_view ( pointer p_ ) noexcept {
-        return reinterpret_cast<pointer> ( reinterpret_cast<std::uintptr_t> ( p_ ) | ptr_mask );
+        return reinterpret_cast<pointer> ( reinterpret_cast<std::uintptr_t> ( p_ ) & ptr_mask );
     }
 
     private:
@@ -244,7 +244,7 @@ template<std::size_t N, std::align_val_t Align>
 struct aligned_stack_storage {
 
     explicit constexpr aligned_stack_storage ( ) noexcept : m_next ( this ) {
-        std::cout << "c'tor " << c << " called" << nl;
+        std::cout << "c'tor " << c << " called " << this << nl;
         // An object cannot own itself.
         m_next.weakify ( );
     };
@@ -308,20 +308,24 @@ class mempool {
         return make_unique<aligned_stack_storage> ( std::move ( p_ ) );
     }
 
+    [[nodiscard]] unique_ptr & back_next ( ) const noexcept {
+        aligned_stack_storage_ptr n = m_last_data.get ( );
+        while ( n->m_next.is_unique ( ) )
+            n = n->m_next.get ( );
+        return n->m_next;
+    }
+
     void grow ( ) noexcept {
 
-        auto back_next = [ this ] ( ) -> unique_ptr & {
-            aligned_stack_storage_ptr n = m_last_data.get ( );
-            while ( n->m_next.is_unique ( ) )
-                n = n->m_next.get ( );
-            return n->m_next;
-        };
+        std::cout << "grow " << m_last_data.get ( ) << " " << nl;
 
         if ( m_last_data.get ( ) ) {
+            std::cout << "add" << nl;
             auto & leaf = back_next ( );
             leaf        = mempool::allocate ( std::move ( leaf ) );
         }
         else {
+            std::cout << "first" << nl;
             m_last_data = mempool::allocate ( );
         }
     }
@@ -341,11 +345,11 @@ int main ( ) {
 
         std::cout << "leaving scope 1" << nl;
 
-        // { pool.grow ( ); }
+        { pool.grow ( ); }
 
         std::cout << "leaving scope 2" << nl;
 
-        /// { pool.grow ( ); }
+        { pool.grow ( ); }
 
         std::cout << "leaving scope 3" << nl;
     }
