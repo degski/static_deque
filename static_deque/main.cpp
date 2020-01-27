@@ -59,83 +59,198 @@ void handleEptr ( std::exception_ptr eptr ) { // Passing by value is ok.
 int counter = 0;
 
 template<typename T>
-using unique_raw_ptr = std::variant<std::unique_ptr<T>, T *>;
+class unique_ptr {
 
-// To use with lambda type matching for std::variant.
+    // https://lokiastari.com/blog/2014/12/30/c-plus-plus-by-example-smart-pointer/
+    // https://codereview.stackexchange.com/questions/163854/my-implementation-for-stdunique-ptr
 
-template<typename... Ts>
-struct overloaded : Ts... {
-    using Ts::operator( )...;
-};
-template<typename... Ts>
-overloaded ( Ts... ) -> overloaded<Ts...>;
-
-template<typename Type>
-struct wobble_ptr {
     public:
-    using value_type    = Type;
+    using value_type    = T;
     using pointer       = value_type *;
     using const_pointer = value_type const *;
 
     using reference       = value_type &;
     using const_reference = value_type const &;
-    using rv_reference    = value_type &&;
 
-    explicit wobble_ptr ( ) noexcept {}
-    wobble_ptr ( pointer p_, bool is_unique_ = true ) noexcept : m_raw ( is_unique_ ? p_ : p_ | one_mask ) {}
+    private:
+    pointer m_raw;
 
-    wobble_ptr ( wobble_ptr const & ) = delete;
-    wobble_ptr ( wobble_ptr && rhs_ ) noexcept : m_raw ( std::exchange ( rhs_.m_raw, nullptr ) ) {}
-
-    ~wobble_ptr ( ) noexcept { destruct ( ); }
-
-    wobble_ptr & operator= ( wobble_ptr const & ) noexcept = delete;
-    wobble_ptr & operator                                  = ( wobble_ptr && rhs_ ) noexcept {
-        destruct ( );
-        m_raw = std::exchange ( rhs_.m_raw, nullptr );
+    public:
+    unique_ptr ( ) : m_raw ( nullptr ) {}
+    // Explicit constructor
+    explicit unique_ptr ( pointer raw ) : m_raw ( raw ) {}
+    ~unique_ptr ( ) {
+        if ( is_unique ( ) )
+            delete m_raw;
     }
 
-    [[nodiscard]] const_pointer get ( ) const noexcept {
-        return reinterpret_cast<const_pointer> ( reinterpret_cast<std::uintptr_t> ( m_raw ) & ptr_mask );
+    // Constructor/Assignment that binds to nullptr
+    // This makes usage with nullptr cleaner
+    unique_ptr ( std::nullptr_t ) : m_raw ( nullptr ) {}
+    unique_ptr & operator= ( std::nullptr_t ) {
+        reset ( );
+        return *this;
     }
-    [[nodiscard]] pointer get ( ) noexcept { return const_cast<pointer> ( std::as_const ( *this ).get ( ) ); }
 
-    [[nodiscard]] const_pointer operator-> ( ) const noexcept { return get ( ); }
-    [[nodiscard]] pointer operator-> ( ) noexcept { return const_cast<pointer> ( std::as_const ( *this ).operator-> ( ) ); }
+    // Constructor/Assignment that allows move semantics
+    unique_ptr ( unique_ptr && moving ) noexcept { moving.swap ( *this ); }
+    unique_ptr & operator= ( unique_ptr && moving ) noexcept {
+        moving.swap ( *this );
+        return *this;
+    }
+
+    // Constructor/Assignment for use with types derived from T
+    template<typename U>
+    explicit unique_ptr ( unique_ptr<U> && moving ) noexcept {
+        unique_ptr<T> tmp ( moving.release ( ) );
+        tmp.swap ( *this );
+    }
+    template<typename U>
+    unique_ptr & operator= ( unique_ptr<U> && moving ) noexcept {
+        unique_ptr<T> tmp ( moving.release ( ) );
+        tmp.swap ( *this );
+        return *this;
+    }
+
+    // Remove compiler generated copy semantics.
+    unique_ptr ( unique_ptr const & ) = delete;
+    unique_ptr & operator= ( unique_ptr const & ) = delete;
+
+    // Const correct access owned object
+    pointer operator-> ( ) const noexcept { return v ( m_raw ); }
+    reference operator* ( ) const { return *v ( m_raw ); }
+
+    // Access to smart pointer state
+    pointer get ( ) const noexcept { return v ( m_raw ); }
+    explicit operator bool ( ) const { return v ( m_raw ); }
+
+    // Modify object state
+    pointer release ( ) noexcept {
+        pointer result = nullptr;
+        std::swap ( result, m_raw );
+        return v ( result );
+    }
+    void swap ( unique_ptr & src ) noexcept { std::swap ( m_raw, src.m_raw ); }
+
+    void reset ( ) noexcept {
+        pointer tmp = release ( );
+        delete v ( tmp );
+    }
+    void reset ( pointer ptr = pointer ( ) ) noexcept {
+        pointer result = ptr;
+        std::swap ( result, m_raw );
+        delete v ( result );
+    }
+    template<typename U>
+    void reset ( unique_ptr<U> && moving ) noexcept {
+        unique_ptr<T> result ( moving );
+        std::swap ( result, *this );
+        delete v ( result );
+    }
 
     void make_weak ( ) noexcept { m_raw |= one_mask; }
     void make_unique ( ) noexcept { m_raw &= ptr_mask; }
 
-    [[nodiscard]] bool is_weak ( ) const noexcept { return reinterpret_cast<std::uintptr_t> ( m_raw ) & one_mask; }
+    void swap_ownership ( unique_ptr & other_ ) noexcept {
+        assert ( v ( m_raw ) == v ( other_.m_raw ) );
+        make_weak ( );
+        other_.make_weak ( );
+    }
+
+    [[nodiscard]] bool is_weak ( ) const noexcept {
+        return static_cast<bool> ( reinterpret_cast<std::uintptr_t> ( m_raw ) & one_mask );
+    }
     [[nodiscard]] bool is_unique ( ) const noexcept { return not is_weak ( ); }
+
+    [[nodiscard]] static constexpr pointer pointer_view ( pointer p_ ) noexcept {
+        return reinterpret_cast<pointer> ( reinterpret_cast<std::uintptr_t> ( p_ ) | ptr_mask );
+    }
+    [[nodiscard]] static constexpr pointer v ( pointer p_ ) noexcept { return pointer_view ( p_ ); }
 
     private:
     static constexpr std::uintptr_t ptr_mask = 0x00FF'FFFF'FFFF'FFF0;
     static constexpr std::uintptr_t one_mask = 0x0000'0000'0000'0001;
-
-    pointer m_raw = nullptr;
-
-    void destruct ( ) noexcept {
-        if ( is_unique ( ) )
-            delete m_raw;
-    }
 };
-template<std::size_t N, std::align_val_t Align = static_cast<std::align_val_t> ( alignof ( std::max_align_t ) )>
+
+////////////////////////////////////////////////////////////////////////////////
+
+namespace std {
+template<typename T>
+void swap ( unique_ptr<T> & lhs, unique_ptr<T> & rhs ) {
+    lhs.swap ( rhs );
+}
+} // namespace std
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// Stephan T Lavavej (STL!) implementation of make_unique, which has been
+// accepted into the C++14 standard. It includes handling for arrays. Paper
+// here: http://isocpp.org/files/papers/N3656.txt
+//
+////////////////////////////////////////////////////////////////////////////////
+
+namespace detail {
+template<class T>
+struct _Unique_if {
+    typedef unique_ptr<T> _Single_object;
+};
+// Specialization for unbound array.
+template<class T>
+struct _Unique_if<T[]> {
+    typedef unique_ptr<T[]> _Unknown_bound;
+};
+// Specialization for array of known size.
+template<class T, size_t N>
+struct _Unique_if<T[ N ]> {
+    typedef void _Known_bound;
+};
+} // namespace detail
+
+////////////////////////////////////////////////////////////////////////////////
+
+// Specialization for normal object type.
+template<class T, class... Args>
+typename detail::_Unique_if<T>::_Single_object make_unique ( Args &&... args ) {
+    return unique_ptr<T> ( new T ( std::forward<Args> ( args )... ) );
+}
+// Specialization for unknown bound.
+template<class T>
+typename detail::_Unique_if<T>::_Unknown_bound make_unique ( size_t size ) {
+    typedef typename std::remove_extent<T>::type U;
+    return unique_ptr<T> ( new U[ size ]( ) );
+}
+// Deleted specialization.
+template<class T, class... Args>
+typename detail::_Unique_if<T>::_Known_bound make_unique ( Args &&... ) = delete;
+
+////////////////////////////////////////////////////////////////////////////////
+
+template<class T>
+unique_ptr<T> make_unique_default_init ( ) {
+    return make_unique<T> ( );
+}
+template<class T>
+unique_ptr<T> make_unique_default_init ( std::size_t size ) {
+    return make_unique<T> ( size );
+}
+template<class T, class... Args>
+typename detail::_Unique_if<T>::_Known_bound make_unique_default_init ( Args &&... ) = delete;
+
+////////////////////////////////////////////////////////////////////////////////
+
+template<std::size_t N, std::align_val_t Align>
 struct aligned_stack_storage {
 
-    using chk_unique_ptr     = std::unique_ptr<aligned_stack_storage>;
-    using chk_unique_raw_ptr = unique_raw_ptr<aligned_stack_storage>;
-
-    explicit constexpr aligned_stack_storage ( ) noexcept : m_next ( std::in_place_type_t<aligned_stack_storage *> ( ), this ) {
+    explicit constexpr aligned_stack_storage ( ) noexcept : m_next ( this ) {
         std::cout << "c'tor " << c << " called" << nl;
+        // An object cannot own itself.
+        m_next.make_weak ( );
     };
     aligned_stack_storage ( aligned_stack_storage const & )     = delete;
     aligned_stack_storage ( aligned_stack_storage && ) noexcept = delete;
 
-    explicit constexpr aligned_stack_storage ( chk_unique_raw_ptr && p_ ) noexcept : m_next ( std::move ( p_ ) ) {
-        std::cout << "c'tor (m_next moved in) " << c << " called" << nl;
-    };
-    explicit constexpr aligned_stack_storage ( chk_unique_ptr && p_ ) noexcept : m_next ( std::move ( p_ ) ) {
+    template<typename U>
+    explicit constexpr aligned_stack_storage ( unique_ptr<U> && p_ ) noexcept : m_next ( p_ ) {
         std::cout << "c'tor (m_next moved in) " << c << " called" << nl;
     };
 
@@ -149,7 +264,7 @@ struct aligned_stack_storage {
     static constexpr std::size_t char_size = N - 2 * sizeof ( char * );
 
     alignas ( static_cast<std::size_t> ( Align ) ) char m_storage[ char_size ];
-    unique_raw_ptr<aligned_stack_storage> m_next;
+    unique_ptr<aligned_stack_storage> m_next;
     int c = counter++;
 };
 
@@ -179,94 +294,42 @@ class mempool {
     using char_ptr = char *;
 
     using aligned_stack_storage = aligned_stack_storage<ChunkSize, static_cast<std::align_val_t> ( alignof ( value_type ) )>;
-    using chk_raw_ptr           = aligned_stack_storage *;
-    using chk_unique_ptr        = std::unique_ptr<aligned_stack_storage>;
-    using chk_unique_raw_ptr    = unique_raw_ptr<aligned_stack_storage>; // smarter.
+    using unique_ptr            = unique_ptr<aligned_stack_storage>;
 
     static constexpr size_type chunck_size = static_cast<size_type> ( aligned_stack_storage::capacity ( ) / sizeof ( value_type ) );
 
-    chk_unique_raw_ptr m_last_data;
+    unique_ptr m_last_data;
 
-    [[nodiscard]] static constexpr chk_unique_raw_ptr chk_allocate ( ) noexcept {
-        return std::make_unique<aligned_stack_storage> ( );
+    [[nodiscard]] static constexpr unique_ptr chk_allocate ( ) noexcept { return make_unique<aligned_stack_storage> ( ); }
+    [[nodiscard]] static constexpr unique_ptr chk_allocate ( unique_ptr && p_ ) noexcept {
+        return make_unique<aligned_stack_storage> ( std::move ( p_ ) );
     }
 
-    [[nodiscard]] static constexpr chk_unique_raw_ptr chk_allocate ( chk_unique_raw_ptr && p_ ) noexcept {
-        return std::make_unique<aligned_stack_storage> ( std::move ( p_ ) );
-    }
-
-    template<typename T = void>
-    [[nodiscard]] constexpr chk_raw_ptr chk_raw ( chk_unique_raw_ptr const & sp_ ) const noexcept {
-        if constexpr ( std::is_same<chk_unique_ptr, T>::value ) {
-            return std::get<T> ( sp_ ).get ( );
-        }
-        else if constexpr ( std::is_same<chk_raw_ptr, T>::value ) {
-            return std::get<T> ( sp_ );
-        }
-        else {
-            chk_raw_ptr v = nullptr;
-            std::visit ( overloaded{ [ &v ] ( chk_unique_ptr const & arg ) { v = arg.get ( ); },
-                                     [ &v ] ( chk_raw_ptr const & arg ) { v = arg; } },
-                         sp_ );
-            assert ( v );
-            return v;
-        }
-    }
-
-    [[nodiscard]] constexpr chk_raw_ptr chk_raw ( chk_unique_ptr const & sp_ ) const noexcept { return sp_.get ( ); }
-
-    [[nodiscard]] constexpr bool is_chk_unique_ptr ( chk_unique_raw_ptr const & sp_ ) const noexcept {
-        return std::holds_alternative<chk_unique_ptr> ( sp_ );
-    }
-
-    [[nodiscard]] constexpr bool is_chk_raw_ptr ( chk_unique_raw_ptr const & sp_ ) const noexcept {
-        return std::holds_alternative<chk_raw_ptr> ( sp_ );
-    }
-
-    // Swap the containing type, between 2 chk_unique_raw_ptr's, pointing at the same value.
-    void swap_types ( chk_unique_raw_ptr & p0_, chk_unique_raw_ptr & p1_ ) const noexcept {
-        // So never an object goes out of scope and never an object is held twice.
-        assert ( chk_raw ( p0_ ) == chk_raw ( p1_ ) );
-        bool const i0 = is_chk_raw_ptr ( p0_ );
-        if ( i0 != is_chk_raw_ptr ( p1_ ) ) {
-            if ( i0 ) { // rp, up.
-                p1_ = std::get<chk_unique_ptr> ( p0_ = std::move ( std::get<chk_unique_ptr> ( p1_ ) ) ).get ( );
-            }
-            else // up, rp.
-                p0_ = std::get<chk_unique_ptr> ( p1_ = std::move ( std::get<chk_unique_ptr> ( p0_ ) ) ).get ( );
-        }
-        else {
-            // Nothing to be done.
-        }
-    }
-
-    [[nodiscard]] chk_unique_raw_ptr & chk_leaf ( ) const noexcept {
-        chk_raw_ptr n = chk_raw<chk_unique_ptr> ( m_last_data ); // !!!!
-        while ( is_chk_unique_ptr ( n->m_next ) )
-            n = chk_raw<chk_unique_ptr> ( n->m_next );
-        return n->m_next;
-    }
+    // Swap the containing type, between 2 unique_ptr's, pointing at the same value.
+    void swap_types ( unique_ptr & p0_, unique_ptr & p1_ ) const noexcept { p0_.swap_ownership ( p1_ ); }
 
     void grow ( ) noexcept {
-        if ( chk_raw ( m_last_data ) ) {
-            std::get<chk_unique_ptr> ( m_last_data )->m_next = chk_allocate (
-                std::get<chk_unique_ptr> ( m_last_data )->m_next ); // Constuct new aligned_stack_storage, and move into m_next.
-            swap_types ( chk_leaf ( ), m_last_data );
+
+        if ( m_last_data ) {
+            // std::get<unique_ptr> ( m_last_data )->m_next = chk_allocate (
+            //    std::get<unique_ptr> ( m_last_data )->m_next ); // Constuct new aligned_stack_storage, and move into m_next.
+            // swap_types ( chk_leaf ( ), m_last_data );
             // Move last forward.
         }
         else {
-            m_last_data = chk_allocate ( );
+            // m_last_data = chk_allocate ( );
         }
     }
 
     pointer m_front = nullptr, m_back = nullptr;
 };
 
-int main565765 ( ) {
+int main657565 ( ) {
 
     std::exception_ptr eptr;
 
     try {
+        unique_ptr<int> p;
     }
     catch ( ... ) {
         eptr = std::current_exception ( ); // Capture.
