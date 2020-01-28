@@ -39,6 +39,8 @@
 
 #include <static_deque.hpp>
 
+#include "trie.h"
+
 // -fsanitize=address
 /*
 C:\Program Files\LLVM\lib\clang\10.0.0\lib\windows\clang_rt.asan_cxx-x86_64.lib;
@@ -345,7 +347,66 @@ class mempool {
     pointer m_front = nullptr, m_back = nullptr;
 };
 
+template<typename T>
+struct offset_ptr {
+    public:
+    using value_type    = T;
+    using pointer       = value_type *;
+    using const_pointer = value_type const *;
+
+    using reference       = value_type &;
+    using const_reference = value_type const &;
+    using rv_reference    = value_type &&;
+
+    using size_type   = std::int32_t;
+    using offset_type = std::int16_t;
+
+    explicit offset_ptr ( ) noexcept                    = default;
+    explicit offset_ptr ( offset_ptr const & ) noexcept = default;
+    explicit offset_ptr ( offset_ptr && ) noexcept      = default;
+
+    offset_ptr ( pointer p_ ) noexcept : offset ( base - p_ ) { assert ( not( ( get ( ) - p_ ) ) ); }
+
+    [[maybe_unused]] offset_ptr & operator= ( offset_ptr const & ) noexcept = default;
+    [[maybe_unused]] offset_ptr & operator= ( offset_ptr && ) noexcept = default;
+    [[maybe_unused]] offset_ptr & operator                             = ( pointer p_ ) noexcept {
+        offset = base - p_;
+        assert ( not( ( get ( ) - p_ ) ) );
+        return *this;
+    }
+
+    [[nodiscard]] const_pointer operator-> ( ) const noexcept { return get ( ); }
+    [[nodiscard]] pointer operator-> ( ) noexcept { return const_cast<pointer> ( std::as_const ( *this ).get ( ) ); }
+
+    [[nodiscard]] const_reference operator* ( ) const noexcept { return *( this->operator-> ( ) ); }
+    [[nodiscard]] reference operator* ( ) noexcept { return *( this->operator-> ( ) ); }
+
+    [[nodiscard]] pointer get ( ) const noexcept { return base - offset; }
+
+    [[nodiscard]] static pointer stack_top ( ) noexcept {
+        void * p = std::addressof ( p );
+        return reinterpret_cast<pointer> ( const_cast<void *> ( p ) );
+    }
+
+    size_type max_size ( ) noexcept { return static_cast<size_type> ( std::numeric_limits<offset_type>::max ( ) ); }
+
+    offset_type offset = { };
+
+    static pointer base;
+};
+
+template<typename T>
+typename offset_ptr<T>::pointer offset_ptr<T>::base = stack_top ( );
+
 int main ( ) {
+
+    offset_ptr<int> p;
+    int i = 999;
+    p     = &i;
+
+    std::cout << p.get ( ) << nl;
+
+    exit ( 0 );
 
     mempool<int, std::size_t, 64> pool;
 
