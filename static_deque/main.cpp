@@ -240,11 +240,20 @@ typename detail::_Unique_if<T>::_Known_bound make_unique_default_init ( Args &&.
 
 ////////////////////////////////////////////////////////////////////////////////
 
+template<typename T>
+struct params {
+    unique_ptr<T> m_next;
+    T * m_prev            = nullptr;
+    std::uint16_t m_begin = 0, m_end = 0;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+
 template<std::size_t N, std::align_val_t Align>
 struct aligned_stack_storage {
 
     explicit constexpr aligned_stack_storage ( ) noexcept : m_next ( this ) {
-        std::cout << "c'tor " << c << " called " << this << nl;
+        std::cout << "c'tor " << c << " called" << nl;
         // An object cannot own itself.
         m_next.weakify ( );
     };
@@ -318,8 +327,6 @@ class mempool {
 
     void grow ( ) noexcept {
 
-        std::cout << "grow " << m_last_data.get ( ) << " " << nl;
-
         if ( m_last_data.get ( ) ) {
             std::cout << "add" << nl;
             auto & leaf = back_next ( );
@@ -364,12 +371,28 @@ int main ( ) {
     return EXIT_SUCCESS;
 }
 
-int main657565 ( ) {
+struct Foo {
+
+    int foo;
+
+    Foo ( ) noexcept { control ( ); }
+
+    params<int> & control ( ) noexcept {
+        static params<int> param;
+        std::cout << std::addressof ( param ) << nl;
+        return param;
+    }
+};
+
+int main86766 ( ) {
 
     std::exception_ptr eptr;
 
     try {
-        unique_ptr<int> p;
+
+        Foo f;
+
+        std::cout << std::addressof ( f ) << nl;
     }
     catch ( ... ) {
         eptr = std::current_exception ( ); // Capture.
