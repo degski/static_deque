@@ -275,17 +275,6 @@ struct aligned_stack_storage {
     aligned_stack_storage & operator= ( aligned_stack_storage const & ) = delete;
     aligned_stack_storage & operator= ( aligned_stack_storage && ) = delete;
 
-    params<aligned_stack_storage> & param ( ) noexcept {
-        static params<aligned_stack_storage> param;
-        assert ( m_next.is_weak ( ) );
-        return param;
-    }
-
-    unique_ptr<aligned_stack_storage> & next ( ) noexcept { return param ( ).m_next; }
-    aligned_stack_storage *& prev ( ) noexcept { return param ( ).m_prev; }
-    std::uint16_t & begin ( ) noexcept { return param ( ).m_begin; }
-    std::uint16_t & end ( ) noexcept { return param ( ).m_end; }
-
     static constexpr std::size_t capacity ( ) noexcept { return char_size; };
 
     static constexpr std::size_t char_size = N - 2 * sizeof ( char * );
