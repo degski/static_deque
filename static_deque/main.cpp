@@ -56,8 +56,6 @@ void handleEptr ( std::exception_ptr eptr ) { // Passing by value is ok.
     }
 }
 
-int counter = 0;
-
 template<typename T>
 class unique_ptr {
 
@@ -245,6 +243,11 @@ struct params {
     unique_ptr<T> m_next;
     T * m_prev            = nullptr;
     std::uint16_t m_begin = 0, m_end = 0;
+    explicit params ( T * moving ) noexcept : m_next ( moving ) {
+        m_next.weakify ( );
+        assert ( m_next.is_weak ( ) );
+    }
+    explicit params ( unique_ptr<T> && moving ) noexcept : m_next ( std::move ( moving ) ) { assert ( m_next.is_weak ( ) ); }
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -253,7 +256,7 @@ template<std::size_t N, std::align_val_t Align>
 struct aligned_stack_storage {
 
     explicit constexpr aligned_stack_storage ( ) noexcept : m_next ( this ) {
-        std::cout << "c'tor " << c << " called" << nl;
+        std::cout << "c'tor called" << nl;
         // An object cannot own itself.
         m_next.weakify ( );
     };
@@ -262,10 +265,10 @@ struct aligned_stack_storage {
 
     template<typename U>
     explicit constexpr aligned_stack_storage ( unique_ptr<U> && p_ ) noexcept : m_next ( std::move ( p_ ) ) {
-        std::cout << "c'tor (m_next moved in) " << c << " called" << nl;
+        std::cout << "c'tor (m_next moved in) called" << nl;
     };
 
-    ~aligned_stack_storage ( ) noexcept { std::cout << "d'tor " << c << " called" << nl; }
+    ~aligned_stack_storage ( ) noexcept { std::cout << "d'tor called" << nl; }
 
     aligned_stack_storage & operator= ( aligned_stack_storage const & ) = delete;
     aligned_stack_storage & operator= ( aligned_stack_storage && ) = delete;
@@ -276,7 +279,6 @@ struct aligned_stack_storage {
 
     alignas ( static_cast<std::size_t> ( Align ) ) char m_storage[ char_size ];
     unique_ptr<aligned_stack_storage> m_next;
-    int c = counter++;
 };
 
 template<typename Type, typename SizeType, std::size_t ChunkSize = 512u>
@@ -371,28 +373,11 @@ int main ( ) {
     return EXIT_SUCCESS;
 }
 
-struct Foo {
-
-    int foo;
-
-    Foo ( ) noexcept { control ( ); }
-
-    params<int> & control ( ) noexcept {
-        static params<int> param;
-        std::cout << std::addressof ( param ) << nl;
-        return param;
-    }
-};
-
 int main86766 ( ) {
 
     std::exception_ptr eptr;
 
     try {
-
-        Foo f;
-
-        std::cout << std::addressof ( f ) << nl;
     }
     catch ( ... ) {
         eptr = std::current_exception ( ); // Capture.
