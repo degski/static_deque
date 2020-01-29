@@ -361,37 +361,36 @@ struct offset_ptr {
     using size_type   = std::uint32_t;
     using offset_type = std::uint16_t;
 
-    explicit offset_ptr ( ) noexcept                    = default;
+    explicit offset_ptr ( ) noexcept : offset ( base.incr_ref_count ( offset_type ( 0 ) ) ) {}
+    explicit offset_ptr ( std::nullptr_t ) : offset ( base.incr_ref_count ( offset_type ( 0 ) ) ) {}
     explicit offset_ptr ( offset_ptr const & ) noexcept = delete;
-
-    offset_ptr ( pointer p_ ) noexcept : offset ( p_ - offset_ptr::base ) { assert ( get ( ) == p_ ); }
-
-    ~offset_ptr ( ) noexcept {
-        if ( is_unique ( ) )
-            delete get ( );
-    }
-
-    // Constructor/Assignment that binds to nullptr
-    // This makes usage with nullptr cleaner
-    offset_ptr ( std::nullptr_t ) : offset ( 0 ) {}
-    offset_ptr & operator= ( std::nullptr_t ) {
-        reset ( );
-        return *this;
-    }
-
-    // Constructor/Assignment that allows move semantics
     offset_ptr ( offset_ptr && moving ) noexcept { moving.swap ( *this ); }
-    offset_ptr & operator= ( offset_ptr && moving ) noexcept {
-        moving.swap ( *this );
-        return *this;
-    }
-
-    // Constructor/Assignment for use with types derived from T
     template<typename U>
     explicit offset_ptr ( offset_ptr<U> && moving ) noexcept {
         offset_ptr<T> tmp ( moving.release ( ) );
         tmp.swap ( *this );
     }
+    offset_ptr ( pointer p_ ) noexcept : offset ( base.incr_ref_count ( p_ - offset_ptr::base.ptr ) ) { assert ( get ( ) == p_ ); }
+
+    ~offset_ptr ( ) noexcept {
+        base.decr_ref_count ( );
+        if ( is_unique ( ) )
+            delete get ( );
+    }
+
+    [[maybe_unused]] offset_ptr & operator= ( std::nullptr_t ) {
+        incr_ref_count ( );
+        reset ( );
+        return *this;
+    }
+
+    [[maybe_unused]] offset_ptr & operator= ( offset_ptr const & ) noexcept = delete;
+
+    [[maybe_unused]] offset_ptr & operator= ( offset_ptr && moving ) noexcept {
+        moving.swap ( *this );
+        return *this;
+    }
+
     template<typename U>
     [[maybe_unused]] offset_ptr & operator= ( offset_ptr<U> && moving ) noexcept {
         offset_ptr<T> tmp ( moving.release ( ) );
@@ -399,7 +398,12 @@ struct offset_ptr {
         return *this;
     }
 
-    // Modify object state
+    [[maybe_unused]] offset_ptr & operator= ( pointer p_ ) noexcept {
+        offset = p_ - offset_ptr::base.ptr;
+        assert ( get ( ) == p_ );
+        return *this;
+    }
+
     [[nodiscard]] pointer release ( ) noexcept {
         offset_type result = { };
         std::swap ( result, offset );
@@ -408,26 +412,14 @@ struct offset_ptr {
 
     void swap ( offset_ptr & src ) noexcept { std::swap ( offset, src.offset ); }
 
-    [[maybe_unused]] offset_ptr & operator= ( offset_ptr const & ) noexcept = delete;
-    [[maybe_unused]] offset_ptr & operator                                  = ( pointer p_ ) noexcept {
-        offset = p_ - offset_ptr::base;
-        assert ( get ( ) == p_ );
-        return *this;
-    }
-
     [[nodiscard]] const_pointer operator-> ( ) const noexcept { return get ( ); }
     [[nodiscard]] pointer operator-> ( ) noexcept { return const_cast<pointer> ( std::as_const ( *this ).get ( ) ); }
 
     [[nodiscard]] const_reference operator* ( ) const noexcept { return *( this->operator-> ( ) ); }
     [[nodiscard]] reference operator* ( ) noexcept { return *( this->operator-> ( ) ); }
 
-    [[nodiscard]] pointer get ( ) const noexcept { return base + offset_view ( offset ); }
+    [[nodiscard]] pointer get ( ) const noexcept { return offset_ptr::base.ptr + offset_view ( offset ); }
     [[nodiscard]] pointer get ( offset_type o_ ) const noexcept { return offset_ptr::base + o_; }
-
-    [[nodiscard]] static pointer stack_top ( ) noexcept {
-        volatile void * p = std::addressof ( p );
-        return reinterpret_cast<pointer> ( const_cast<void *> ( p ) );
-    }
 
     [[nodiscard]] size_type max_size ( ) noexcept {
         return static_cast<size_type> ( std::numeric_limits<offset_type>::max ( ) ) >> 1;
@@ -435,7 +427,7 @@ struct offset_ptr {
 
     void reset ( ) noexcept { delete release ( ); }
     void reset ( pointer p_ = pointer ( ) ) noexcept {
-        offset_type result = p_ - offset_ptr::base;
+        offset_type result = p_ - offset_ptr::base.ptr;
         std::swap ( result, offset );
         delete get ( result );
     }
@@ -458,17 +450,43 @@ struct offset_ptr {
     [[nodiscard]] static constexpr offset_type make_weak_mask ( ) noexcept {
         return static_cast<offset_type> ( std::uint64_t ( 1 ) << ( sizeof ( size_type ) * 8 - 1 ) );
     }
+    [[nodiscard]] static constexpr offset_type make_offset_mask ( ) noexcept { return ~make_weak_mask ( ); }
 
-    static constexpr offset_type offset_mask = ~offset_ptr::make_weak_mask ( );
     static constexpr offset_type weak_mask   = offset_ptr::make_weak_mask ( );
+    static constexpr offset_type offset_mask = offset_ptr::make_offset_mask ( );
 
     offset_type offset = { };
 
-    static thread_local pointer base;
+    struct offset_base {
+
+        pointer ptr             = nullptr;
+        std::intptr_t ref_count = 0;
+
+        public:
+        [[maybe_unused]] offset_type && incr_ref_count ( offset_type && o_ ) noexcept {
+            if ( ref_count ) {
+                ++ref_count;
+            }
+            else {
+                ptr       = stack_top ( );
+                ref_count = 1;
+            }
+            return std::move ( o_ );
+        }
+        void incr_ref_count ( ) noexcept { incr_ref_count ( nullptr ); }
+        void decr_ref_count ( ) noexcept { --ref_count; }
+
+        [[nodiscard]] static pointer stack_top ( ) noexcept {
+            volatile void * p = std::addressof ( p );
+            return reinterpret_cast<pointer> ( const_cast<void *> ( p ) );
+        }
+    };
+
+    static thread_local offset_base base;
 };
 
 template<typename T>
-thread_local typename offset_ptr<T>::pointer offset_ptr<T>::base = stack_top ( );
+thread_local typename offset_ptr<T>::offset_base offset_ptr<T>::base;
 
 int main ( ) {
 
