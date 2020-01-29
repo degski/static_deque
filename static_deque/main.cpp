@@ -364,7 +364,7 @@ struct offset_ptr {
     explicit offset_ptr ( ) noexcept                    = default;
     explicit offset_ptr ( offset_ptr const & ) noexcept = delete;
 
-    offset_ptr ( pointer p_ ) noexcept : offset ( p_ - base ) { assert ( get ( ) == p_ ); }
+    offset_ptr ( pointer p_ ) noexcept : offset ( p_ - offset_ptr::base ) { assert ( get ( ) == p_ ); }
 
     ~offset_ptr ( ) noexcept {
         if ( is_unique ( ) )
@@ -410,7 +410,7 @@ struct offset_ptr {
 
     [[maybe_unused]] offset_ptr & operator= ( offset_ptr const & ) noexcept = delete;
     [[maybe_unused]] offset_ptr & operator                                  = ( pointer p_ ) noexcept {
-        offset = p_ - base;
+        offset = p_ - offset_ptr::base;
         assert ( get ( ) == p_ );
         return *this;
     }
@@ -422,18 +422,18 @@ struct offset_ptr {
     [[nodiscard]] reference operator* ( ) noexcept { return *( this->operator-> ( ) ); }
 
     [[nodiscard]] pointer get ( ) const noexcept { return base + offset_view ( offset ); }
-    [[nodiscard]] pointer get ( offset_type o_ ) const noexcept { return base + o_; }
+    [[nodiscard]] pointer get ( offset_type o_ ) const noexcept { return offset_ptr::base + o_; }
 
     [[nodiscard]] static pointer stack_top ( ) noexcept {
-        void * p = std::addressof ( p );
+        volatile void * p = std::addressof ( p );
         return reinterpret_cast<pointer> ( const_cast<void *> ( p ) );
     }
 
-    size_type max_size ( ) noexcept { return static_cast<size_type> ( std::numeric_limits<offset_type>::max ( ) ); }
+    size_type max_size ( ) noexcept { return static_cast<size_type> ( std::numeric_limits<offset_type>::max ( ) ) >> 1; }
 
     void reset ( ) noexcept { delete release ( ); }
     void reset ( pointer p_ = pointer ( ) ) noexcept {
-        offset_type result = p_ - base;
+        offset_type result = p_ - offset_ptr::base;
         std::swap ( result, offset );
         delete get ( result );
     }
@@ -444,7 +444,7 @@ struct offset_ptr {
         delete result.get ( );
     }
 
-    void weakify ( ) noexcept { offset = reinterpret_cast<pointer> ( offset_view ( offset ) | weak_mask ); }
+    void weakify ( ) noexcept { offset = ( offset_view ( offset ) | weak_mask ); }
     void uniquify ( ) noexcept { offset &= offset_mask; }
 
     [[nodiscard]] bool is_weak ( ) const noexcept { return static_cast<bool> ( offset & weak_mask ); }
@@ -454,7 +454,7 @@ struct offset_ptr {
 
     private:
     static constexpr offset_type make_weak_mask ( ) noexcept {
-        return static_cast<offset_type> ( std::uint32_t ( 1 ) << ( sizeof ( size_type ) * 8 - 1 ) );
+        return static_cast<offset_type> ( std::uint64_t ( 1 ) << ( sizeof ( size_type ) * 8 - 1 ) );
     }
 
     static constexpr offset_type offset_mask = ~offset_ptr::make_weak_mask ( );
