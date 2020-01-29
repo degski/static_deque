@@ -361,22 +361,33 @@ struct offset_ptr {
     using size_type   = std::uint32_t;
     using offset_type = std::uint16_t;
 
+    // Constructors.
+
     explicit offset_ptr ( ) noexcept : offset ( base.incr_ref_count ( offset_type ( 0 ) ) ) {}
+
     explicit offset_ptr ( std::nullptr_t ) : offset ( base.incr_ref_count ( offset_type ( 0 ) ) ) {}
+
     explicit offset_ptr ( offset_ptr const & ) noexcept = delete;
+
     offset_ptr ( offset_ptr && moving ) noexcept { moving.swap ( *this ); }
+
     template<typename U>
     explicit offset_ptr ( offset_ptr<U> && moving ) noexcept {
         offset_ptr<T> tmp ( moving.release ( ) );
         tmp.swap ( *this );
     }
+
     offset_ptr ( pointer p_ ) noexcept : offset ( base.incr_ref_count ( p_ - offset_ptr::base.ptr ) ) { assert ( get ( ) == p_ ); }
+
+    // Destruct.
 
     ~offset_ptr ( ) noexcept {
         base.decr_ref_count ( );
         if ( is_unique ( ) )
             delete get ( );
     }
+
+    // Assignment.
 
     [[maybe_unused]] offset_ptr & operator= ( std::nullptr_t ) {
         incr_ref_count ( );
@@ -404,13 +415,7 @@ struct offset_ptr {
         return *this;
     }
 
-    [[nodiscard]] pointer release ( ) noexcept {
-        offset_type result = { };
-        std::swap ( result, offset );
-        return get ( result );
-    }
-
-    void swap ( offset_ptr & src ) noexcept { std::swap ( offset, src.offset ); }
+    // Get.
 
     [[nodiscard]] const_pointer operator-> ( ) const noexcept { return get ( ); }
     [[nodiscard]] pointer operator-> ( ) noexcept { return const_cast<pointer> ( std::as_const ( *this ).get ( ) ); }
@@ -423,6 +428,16 @@ struct offset_ptr {
 
     [[nodiscard]] size_type max_size ( ) noexcept {
         return static_cast<size_type> ( std::numeric_limits<offset_type>::max ( ) ) >> 1;
+    }
+
+    void swap ( offset_ptr & src ) noexcept { std::swap ( offset, src.offset ); }
+
+    // Other.
+
+    [[nodiscard]] pointer release ( ) noexcept {
+        offset_type result = { };
+        std::swap ( result, offset );
+        return get ( result );
     }
 
     void reset ( ) noexcept { delete release ( ); }
