@@ -30,6 +30,7 @@
 #include <memory>
 #include <sax/iostream.hpp>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <variant>
@@ -363,9 +364,9 @@ struct offset_ptr {
 
     // Constructors.
 
-    explicit offset_ptr ( ) noexcept : offset ( base.incr_ref_count ( offset_type ( 0 ) ) ) {}
+    explicit offset_ptr ( ) noexcept : offset ( base.incr_ref_count ( 0u ) ) {}
 
-    explicit offset_ptr ( std::nullptr_t ) : offset ( base.incr_ref_count ( offset_type ( 0 ) ) ) {}
+    explicit offset_ptr ( std::nullptr_t ) : offset ( base.incr_ref_count ( 0u ) ) {}
 
     explicit offset_ptr ( offset_ptr const & ) noexcept = delete;
 
@@ -461,6 +462,13 @@ struct offset_ptr {
 
     [[nodiscard]] static constexpr offset_type offset_view ( offset_type o_ ) noexcept { return o_ & offset_mask; }
 
+    // Deal with heap allocation.
+
+    void * operator new ( std::size_t ) { throw std::bad_alloc ( "offset_ptr cannot be allocated on the heap" ); }
+    void operator delete ( void * ) {
+        throw std::bad_alloc ( "offset_ptr cannot be allocated on the heap, and does nt have to be deleted" );
+    }
+
     private:
     [[nodiscard]] static constexpr offset_type make_weak_mask ( ) noexcept {
         return static_cast<offset_type> ( std::uint64_t ( 1 ) << ( sizeof ( size_type ) * 8 - 1 ) );
@@ -470,15 +478,14 @@ struct offset_ptr {
     static constexpr offset_type weak_mask   = offset_ptr::make_weak_mask ( );
     static constexpr offset_type offset_mask = offset_ptr::make_offset_mask ( );
 
-    offset_type offset = { };
-
     struct offset_base {
 
         pointer ptr             = nullptr;
         std::intptr_t ref_count = 0;
 
         public:
-        [[maybe_unused]] offset_type && incr_ref_count ( offset_type && o_ ) noexcept {
+        template<typename U>
+        [[maybe_unused]] U && incr_ref_count ( U && o_ ) noexcept {
             if ( ref_count ) {
                 ++ref_count;
             }
@@ -488,7 +495,7 @@ struct offset_ptr {
             }
             return std::move ( o_ );
         }
-        void incr_ref_count ( ) noexcept { incr_ref_count ( nullptr ); }
+        void incr_ref_count ( ) noexcept { incr_ref_count ( 0u ); }
         void decr_ref_count ( ) noexcept { --ref_count; }
 
         [[nodiscard]] static pointer stack_top ( ) noexcept {
@@ -496,6 +503,8 @@ struct offset_ptr {
             return reinterpret_cast<pointer> ( const_cast<void *> ( p ) );
         }
     };
+
+    offset_type offset = { };
 
     static thread_local offset_base base;
 };
