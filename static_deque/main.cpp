@@ -146,20 +146,20 @@ class unique_ptr {
     }
 
     void weakify ( ) noexcept {
-        m_data = reinterpret_cast<pointer> ( reinterpret_cast<std::uintptr_t> ( pointer_view ( m_data ) ) | one_mask );
+        m_data = reinterpret_cast<pointer> ( reinterpret_cast<std::uintptr_t> ( pointer_view ( m_data ) ) | weak_mask );
     }
     void uniquify ( ) noexcept { m_data &= ptr_mask; }
 
     void swap_ownership ( unique_ptr & other_ ) noexcept {
         auto flip = [] ( unique_ptr & u ) {
-            u.m_data = reinterpret_cast<pointer> ( reinterpret_cast<std::uintptr_t> ( u.m_data ) | one_mask );
+            u.m_data = reinterpret_cast<pointer> ( reinterpret_cast<std::uintptr_t> ( u.m_data ) | weak_mask );
         };
         flip ( *this );
         flip ( other_ );
     }
 
     [[nodiscard]] bool is_weak ( ) const noexcept {
-        return static_cast<bool> ( reinterpret_cast<std::uintptr_t> ( m_data ) & one_mask );
+        return static_cast<bool> ( reinterpret_cast<std::uintptr_t> ( m_data ) & weak_mask );
     }
     [[nodiscard]] bool is_unique ( ) const noexcept { return not is_weak ( ); }
 
@@ -170,8 +170,8 @@ class unique_ptr {
     private:
     pointer m_data;
 
-    static constexpr std::uintptr_t ptr_mask = 0x00FF'FFFF'FFFF'FFF0;
-    static constexpr std::uintptr_t one_mask = 0x0000'0000'0000'0001;
+    static constexpr std::uintptr_t ptr_mask  = 0x00FF'FFFF'FFFF'FFF0;
+    static constexpr std::uintptr_t weak_mask = 0x0000'0000'0000'0001;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -358,20 +358,62 @@ struct offset_ptr {
     using const_reference = value_type const &;
     using rv_reference    = value_type &&;
 
-    using size_type   = std::int32_t;
-    using offset_type = std::int16_t;
+    using size_type   = std::uint32_t;
+    using offset_type = std::uint16_t;
 
     explicit offset_ptr ( ) noexcept                    = default;
-    explicit offset_ptr ( offset_ptr const & ) noexcept = default;
-    explicit offset_ptr ( offset_ptr && ) noexcept      = default;
+    explicit offset_ptr ( offset_ptr const & ) noexcept = delete;
 
-    offset_ptr ( pointer p_ ) noexcept : offset ( base - p_ ) { assert ( not( ( get ( ) - p_ ) ) ); }
+    offset_ptr ( pointer p_ ) noexcept : offset ( base - p_ ) { assert ( get ( ) == p_ ); }
 
-    [[maybe_unused]] offset_ptr & operator= ( offset_ptr const & ) noexcept = default;
-    [[maybe_unused]] offset_ptr & operator= ( offset_ptr && ) noexcept = default;
-    [[maybe_unused]] offset_ptr & operator                             = ( pointer p_ ) noexcept {
-        offset = base - p_;
-        assert ( not( ( get ( ) - p_ ) ) );
+    ~offset_ptr ( ) noexcept {
+        // if ( is_unique ( ) )
+        //    delete get ( );
+    }
+
+    // Constructor/Assignment that binds to nullptr
+    // This makes usage with nullptr cleaner
+    offset_ptr ( std::nullptr_t ) : offset ( 0 ) {}
+    offset_ptr & operator= ( std::nullptr_t ) {
+        // reset ( );
+        return *this;
+    }
+
+    // Constructor/Assignment that allows move semantics
+    offset_ptr ( offset_ptr && moving ) noexcept { moving.swap ( *this ); }
+    offset_ptr & operator= ( offset_ptr && moving ) noexcept {
+        moving.swap ( *this );
+        return *this;
+    }
+
+    // Constructor/Assignment for use with types derived from T
+    template<typename U>
+    explicit offset_ptr ( offset_ptr<U> && moving ) noexcept {
+        offset_ptr<T> tmp ( moving.release ( ) );
+        tmp.swap ( *this );
+    }
+    template<typename U>
+    offset_ptr & operator= ( offset_ptr<U> && moving ) noexcept {
+        offset_ptr<T> tmp ( moving.release ( ) );
+        tmp.swap ( *this );
+        return *this;
+    }
+
+    /*
+    // Modify object state
+    offset_type release ( ) noexcept {
+        offset_type result = { };
+        std::swap ( result, offset );
+        return offset_type_view ( result );
+    }
+    */
+
+    void swap ( offset_ptr & src ) noexcept { std::swap ( offset, src.offset ); }
+
+    [[maybe_unused]] offset_ptr & operator= ( offset_ptr const & ) noexcept = delete;
+    [[maybe_unused]] offset_ptr & operator                                  = ( pointer p_ ) noexcept {
+        offset = p_ - base;
+        assert ( get ( ) == p_ );
         return *this;
     }
 
@@ -381,7 +423,7 @@ struct offset_ptr {
     [[nodiscard]] const_reference operator* ( ) const noexcept { return *( this->operator-> ( ) ); }
     [[nodiscard]] reference operator* ( ) noexcept { return *( this->operator-> ( ) ); }
 
-    [[nodiscard]] pointer get ( ) const noexcept { return base - offset; }
+    [[nodiscard]] pointer get ( ) const noexcept { return base + offset; }
 
     [[nodiscard]] static pointer stack_top ( ) noexcept {
         void * p = std::addressof ( p );
@@ -389,7 +431,21 @@ struct offset_ptr {
     }
 
     size_type max_size ( ) noexcept { return static_cast<size_type> ( std::numeric_limits<offset_type>::max ( ) ); }
+    /*
+    void weakify ( ) noexcept { offset = reinterpret_cast<pointer> ( offset_view ( offset ) | weak_mask ); }
+    void uniquify ( ) noexcept { offset &= offset_mask; }
 
+    [[nodiscard]] bool is_weak ( ) const noexcept { return static_cast<bool> ( offset & weak_mask ); }
+    [[nodiscard]] bool is_unique ( ) const noexcept { return not is_weak ( ); }
+
+    [[nodiscard]] static constexpr offset_type offset_view ( offset_type o_ ) noexcept { return o_ & offset_mask; }
+
+    private:
+    static constexpr offset_type make_weak_mask ( ) noexcept { return int ( 1 ) << ( sizeof ( size_type ) * 8 - 1 ); }
+
+    static constexpr offset_type offset_mask = ~offset_ptr::make_weak_mask ( );
+    static constexpr offset_type weak_mask   = offset_ptr::make_weak_mask ( );
+    */
     offset_type offset = { };
 
     static pointer base;
