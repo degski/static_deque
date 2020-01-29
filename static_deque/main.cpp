@@ -393,14 +393,14 @@ struct offset_ptr {
         tmp.swap ( *this );
     }
     template<typename U>
-    offset_ptr & operator= ( offset_ptr<U> && moving ) noexcept {
+    [[maybe_unused]] offset_ptr & operator= ( offset_ptr<U> && moving ) noexcept {
         offset_ptr<T> tmp ( moving.release ( ) );
         tmp.swap ( *this );
         return *this;
     }
 
     // Modify object state
-    pointer release ( ) noexcept {
+    [[nodiscard]] pointer release ( ) noexcept {
         offset_type result = { };
         std::swap ( result, offset );
         return get ( result );
@@ -429,7 +429,9 @@ struct offset_ptr {
         return reinterpret_cast<pointer> ( const_cast<void *> ( p ) );
     }
 
-    size_type max_size ( ) noexcept { return static_cast<size_type> ( std::numeric_limits<offset_type>::max ( ) ) >> 1; }
+    [[nodiscard]] size_type max_size ( ) noexcept {
+        return static_cast<size_type> ( std::numeric_limits<offset_type>::max ( ) ) >> 1;
+    }
 
     void reset ( ) noexcept { delete release ( ); }
     void reset ( pointer p_ = pointer ( ) ) noexcept {
@@ -453,7 +455,7 @@ struct offset_ptr {
     [[nodiscard]] static constexpr offset_type offset_view ( offset_type o_ ) noexcept { return o_ & offset_mask; }
 
     private:
-    static constexpr offset_type make_weak_mask ( ) noexcept {
+    [[nodiscard]] static constexpr offset_type make_weak_mask ( ) noexcept {
         return static_cast<offset_type> ( std::uint64_t ( 1 ) << ( sizeof ( size_type ) * 8 - 1 ) );
     }
 
@@ -462,11 +464,11 @@ struct offset_ptr {
 
     offset_type offset = { };
 
-    static pointer base;
+    static thread_local pointer base;
 };
 
 template<typename T>
-typename offset_ptr<T>::pointer offset_ptr<T>::base = stack_top ( );
+thread_local typename offset_ptr<T>::pointer offset_ptr<T>::base = stack_top ( );
 
 int main ( ) {
 
